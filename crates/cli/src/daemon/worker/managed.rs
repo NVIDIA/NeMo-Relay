@@ -1464,31 +1464,36 @@ impl ObservationReceiver {
         let signal = Arc::clone(&self.signal);
         let status = self.status;
         // HTTP rejection bodies can be ordinary JSON even for streaming requests.
-        let result = if streaming && status.is_success() {
+        let observe_stream = streaming && status.is_success();
+        let result = if observe_stream {
             self.finish_stream(surface).await
         } else {
-            Ok(self.finish_buffered().await)
+            self.finish_buffered().await
         };
         let terminal = signal.wait().await;
-        let (value, stream_failure) = match result {
+        let (value, response_failure) = match result {
             Ok(value) => (value, None),
             Err(error) => (None, Some(error.to_string())),
         };
         let truncated = signal.truncated.load(Ordering::Acquire)
-            || (terminal == OBSERVATION_COMPLETE && stream_failure.is_some());
+            || (observe_stream && terminal == OBSERVATION_COMPLETE && response_failure.is_some());
         let failure = match terminal {
             // A transport failure is more specific than capture or HTTP errors.
             OBSERVATION_BODY_ERROR => Some("provider response body failed".to_owned()),
-            OBSERVATION_COMPLETE if stream_failure.is_some() => stream_failure,
+            // Closing a failed stream can truncate capture; preserve its known error.
+            OBSERVATION_COMPLETE if observe_stream && response_failure.is_some() => {
+                response_failure
+            }
             OBSERVATION_COMPLETE if truncated => {
                 Some("provider response observation was truncated".to_owned())
             }
             OBSERVATION_COMPLETE | OBSERVATION_CANCELLED if !status.is_success() => {
                 Some(format!("provider returned HTTP {}", status.as_u16()))
             }
+            OBSERVATION_COMPLETE => response_failure,
             // Dropping delivery is a downstream decision, not a provider failure.
             // An already received HTTP error is still reported by the branch above.
-            OBSERVATION_COMPLETE | OBSERVATION_CANCELLED => None,
+            OBSERVATION_CANCELLED => None,
             _ => Some("provider response observation ended unexpectedly".to_owned()),
         };
         ObservedResponse {
@@ -1500,15 +1505,17 @@ impl ObservationReceiver {
         }
     }
 
-    async fn finish_buffered(&mut self) -> Option<Value> {
+    async fn finish_buffered(&mut self) -> Result<Option<Value>, FlowError> {
         let mut bytes = Vec::new();
         while let Some(chunk) = self.receiver.recv().await {
             bytes.extend_from_slice(&chunk);
         }
         if self.signal.truncated.load(Ordering::Acquire) {
-            return None;
+            return Ok(None);
         }
-        serde_json::from_slice(&bytes).ok()
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|_| FlowError::Internal("provider response was not valid JSON".into()))
     }
 
     async fn finish_stream(mut self, surface: ProviderSurface) -> Result<Option<Value>, FlowError> {
