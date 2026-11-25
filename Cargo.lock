@@ -1927,6 +1927,7 @@ dependencies = [
  "http-body",
  "hyper-util",
  "jsonschema",
+ "libc",
  "libloading",
  "log",
  "nemo-relay-plugin",
@@ -2252,6 +2253,7 @@ dependencies = [
  "nemo-relay-types",
  "nemo-relay-worker-proto",
  "prost",
+ "rustix",
  "serde",
  "serde_json",
  "thiserror",
@@ -2259,6 +2261,7 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tower",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -366,10 +366,13 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .await
         .expect("shutdown returns ack")
         .into_inner();
-    assert!(!shutdown.accepted);
-    assert!(shutdown.message.contains("not implemented"));
-
-    handle.abort();
+    assert!(shutdown.accepted);
+    assert!(shutdown.message.contains("test"));
+    tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("shutdown stops the worker")
+        .expect("worker task joins")
+        .expect("worker exits cleanly");
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -72,8 +72,12 @@ import ipaddress
 import json
 import os
 import platform
+import signal
 import stat
+import sys
 import tempfile
+import threading
+import time
 import tomllib
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
@@ -354,6 +358,7 @@ def _llm_execution_context(
 
 WORKER_PROTOCOL = "grpc-v1"
 _WORKER_MAX_MESSAGE_BYTES_ENV = "NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES"
+_HOST_LOSS_EXIT_DELAY_SECONDS = 2.0
 _DEFAULT_WORKER_MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 
 
@@ -2510,19 +2515,24 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     Raises:
         WorkerSdkError: A required environment variable is empty or missing,
             the worker message limit is invalid, or the endpoint cannot be bound.
-        OSError: Unix socket cleanup or endpoint-file creation fails.
+        OSError: Standard input inspection, Unix socket cleanup, or endpoint-file
+            creation fails.
         grpc.RpcError: gRPC server or host-channel startup fails.
         asyncio.CancelledError: The task running the worker is cancelled.
 
     Note:
         The function closes the gRPC server and both host channels during shutdown or
-        cancellation. It returns only after the host accepts a shutdown request.
+        cancellation. It returns after a host shutdown request, or after EOF on a
+        standard input pipe from the host. Pipe EOF ends the process two seconds
+        later, including after this function has already returned. A process that
+        leads its own process group takes that group down with it.
     """
     _plugin_id(plugin)
     worker_endpoint = _required_env("NEMO_RELAY_WORKER_SOCKET")
     host_endpoint = _required_env("NEMO_RELAY_HOST_SOCKET")
     activation_id = _required_env("NEMO_RELAY_WORKER_ID")
     auth_token = _required_env("NEMO_RELAY_WORKER_TOKEN")
+    host_pipe = _is_pipe(0)
     endpoint_file = os.environ.get("NEMO_RELAY_WORKER_ENDPOINT_FILE")
     max_message_bytes = _worker_max_message_bytes()
     try:
@@ -2542,6 +2552,7 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         diagnostic_stub=pb_grpc.RelayDiagnosticsStub(diagnostic_channel),
     )
     shutdown_event = asyncio.Event()
+    host_lost = threading.Event()
     service = _WorkerService(plugin, runtime, shutdown_event)
     server = grpc.aio.server(
         options=_worker_grpc_options(max([max_message_bytes, *by_name.values()])),
@@ -2556,6 +2567,8 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         if endpoint_file:
             path = Path(endpoint_file)
             _write_endpoint_file(path, _announced_worker_endpoint(worker_endpoint, bound_port))
+        if host_pipe:
+            _start_host_liveness_watcher(0, asyncio.get_running_loop(), shutdown_event, host_lost)
         await shutdown_event.wait()
     finally:
         await server.stop(grace=2)
@@ -2563,6 +2576,50 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
             await runtime._close_diagnostics()
         finally:
             await asyncio.gather(host_channel.close(), diagnostic_channel.close())
+        if host_lost.is_set():
+            _terminate_own_process_group()
+
+
+def _is_pipe(descriptor: int) -> bool:
+    return stat.S_ISFIFO(os.fstat(descriptor).st_mode)
+
+
+def _start_host_liveness_watcher(
+    descriptor: int,
+    loop: asyncio.AbstractEventLoop,
+    shutdown_event: asyncio.Event,
+    host_lost: threading.Event,
+) -> threading.Thread:
+    duplicate = os.dup(descriptor)
+    if hasattr(os, "set_blocking"):
+        os.set_blocking(duplicate, True)
+    pipe = os.fdopen(duplicate, "rb", buffering=0)
+
+    def confirm_host_loss() -> None:
+        if not shutdown_event.is_set():
+            host_lost.set()
+            shutdown_event.set()
+
+    def watch() -> None:
+        try:
+            with pipe:
+                while pipe.read(1):
+                    pass
+        finally:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(confirm_host_loss)
+            time.sleep(_HOST_LOSS_EXIT_DELAY_SECONDS)
+            _terminate_own_process_group()
+            os._exit(0)
+
+    watcher = threading.Thread(target=watch, name="nemo-relay-host-liveness", daemon=True)
+    watcher.start()
+    return watcher
+
+
+def _terminate_own_process_group() -> None:
+    if sys.platform != "win32" and os.getpgrp() == os.getpid():
+        os.killpg(os.getpid(), signal.SIGKILL)
 
 
 @dataclass(slots=True)
