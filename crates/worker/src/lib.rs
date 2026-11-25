@@ -142,6 +142,8 @@ pub type BoxFutureResult<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 /// Boxed JSON stream returned by streaming worker callbacks.
 pub type JsonStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>>;
 
+const HOST_LOSS_EXIT_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
 tokio::task_local! {
     static TASK_SCOPE_CONTEXT: Option<ScopeContext>;
     static TASK_CALLBACK_NAME: Option<String>;
@@ -1845,7 +1847,8 @@ impl LlmStreamNext {
 ///
 /// # Errors
 /// Returns an error when required worker environment variables are missing,
-/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, standard input cannot be
+/// inspected, or the gRPC server fails.
 pub async fn serve_plugin(plugin: impl WorkerPlugin) -> Result<()> {
     serve_plugin_arc(Arc::new(plugin)).await
 }
@@ -1854,7 +1857,8 @@ pub async fn serve_plugin(plugin: impl WorkerPlugin) -> Result<()> {
 ///
 /// # Errors
 /// Returns an error when required worker environment variables are missing,
-/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, standard input cannot be
+/// inspected, or the gRPC server fails.
 pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
     let config = WorkerServerConfig {
         worker_endpoint: required_env("NEMO_RELAY_WORKER_SOCKET")?,
@@ -1866,8 +1870,42 @@ pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
         plugin,
         config,
         optional_env("NEMO_RELAY_WORKER_ENDPOINT_FILE").map(PathBuf::from),
+        stdin_is_host_pipe()?,
     )
     .await
+}
+
+#[cfg(unix)]
+fn stdin_is_host_pipe() -> Result<bool> {
+    use std::os::fd::AsFd;
+
+    let inspect_error = |error: std::io::Error| {
+        WorkerSdkError::Transport(format!("failed to inspect standard input: {error}"))
+    };
+    let stdin = std::io::stdin();
+    let descriptor = stdin.as_fd().try_clone_to_owned().map_err(inspect_error)?;
+    let metadata = std::fs::File::from(descriptor)
+        .metadata()
+        .map_err(inspect_error)?;
+    Ok(metadata.file_type().is_fifo())
+}
+
+#[cfg(windows)]
+fn stdin_is_host_pipe() -> Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_PIPE, FILE_TYPE_UNKNOWN, GetFileType};
+
+    // SAFETY: The standard input handle is borrowed for this query.
+    let file_type = unsafe { GetFileType(std::io::stdin().as_raw_handle()) };
+    if file_type == FILE_TYPE_UNKNOWN {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(0) {
+            return Err(WorkerSdkError::Transport(format!(
+                "failed to inspect standard input: {error}"
+            )));
+        }
+    }
+    Ok(file_type == FILE_TYPE_PIPE)
 }
 
 /// Serves a shared worker plugin using explicit endpoint and authentication configuration.
@@ -1882,7 +1920,7 @@ pub async fn serve_plugin_arc_with_config(
     plugin: Arc<dyn WorkerPlugin>,
     config: WorkerServerConfig,
 ) -> Result<()> {
-    serve_plugin_arc_with_endpoint_file(plugin, config, None).await
+    serve_plugin_arc_with_endpoint_file(plugin, config, None, false).await
 }
 
 /// Validates the transport limit before constructing and serving the worker runtime.
@@ -1890,6 +1928,7 @@ async fn serve_plugin_arc_with_endpoint_file(
     plugin: Arc<dyn WorkerPlugin>,
     config: WorkerServerConfig,
     endpoint_file: Option<PathBuf>,
+    monitor_host_liveness: bool,
 ) -> Result<()> {
     let max_message_bytes = WorkerCallbackMessageLimits::default()
         .from_env_with_defaults()
@@ -1904,9 +1943,9 @@ async fn serve_plugin_arc_with_endpoint_file(
         max_message_bytes,
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };
+    let (shutdown, shutdown_receiver) = watch::channel(None);
     let service = WorkerService {
         health_reporter: tonic_health::server::HealthReporter::new(),
-        shutdown: Arc::new(tokio::sync::Notify::new()),
         draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         registration: Arc::new(tokio::sync::Mutex::new(None)),
         registration_cancel: watch::channel(false).0,
@@ -1915,9 +1954,70 @@ async fn serve_plugin_arc_with_endpoint_file(
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
         active_invocations: Arc::new(Mutex::new(HashMap::new())),
         next_invocation_generation: Arc::new(AtomicU64::new(1)),
+        shutdown,
     };
-    serve_worker_service(service, &config.worker_endpoint, endpoint_file.as_deref()).await
+    serve_worker_service(
+        service,
+        &config.worker_endpoint,
+        endpoint_file.as_deref(),
+        shutdown_receiver,
+        monitor_host_liveness,
+    )
+    .await
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShutdownReason {
+    HostRequest,
+    HostLost,
+}
+
+fn request_shutdown(shutdown: &watch::Sender<Option<ShutdownReason>>, reason: ShutdownReason) {
+    shutdown.send_if_modified(|state| {
+        if state.is_some() {
+            return false;
+        }
+        *state = Some(reason);
+        true
+    });
+}
+
+fn finish_worker_shutdown(shutdown: &watch::Receiver<Option<ShutdownReason>>) {
+    if *shutdown.borrow() == Some(ShutdownReason::HostLost) {
+        terminate_own_process_group();
+    }
+}
+
+fn start_host_liveness_watcher(shutdown: watch::Sender<Option<ShutdownReason>>) -> Result<()> {
+    std::thread::Builder::new()
+        .name("nemo-relay-host-liveness".into())
+        .spawn(move || {
+            let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+            request_shutdown(&shutdown, ShutdownReason::HostLost);
+            std::thread::sleep(HOST_LOSS_EXIT_DELAY);
+            terminate_own_process_group();
+            std::process::exit(0);
+        })
+        .map_err(|error| {
+            WorkerSdkError::Transport(format!(
+                "failed to start Relay host liveness watcher: {error}"
+            ))
+        })?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn terminate_own_process_group() {
+    use rustix::process::{Signal, getpgrp, getpid, kill_process_group};
+
+    let group = getpgrp();
+    if group == getpid() {
+        let _ = kill_process_group(group, Signal::KILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_own_process_group() {}
 
 #[cfg(unix)]
 /// Binds a bounded worker service to a Unix socket or delegates to loopback TCP.
@@ -1925,6 +2025,8 @@ async fn serve_worker_service(
     service: WorkerService,
     endpoint: &str,
     endpoint_file: Option<&Path>,
+    shutdown: watch::Receiver<Option<ShutdownReason>>,
+    monitor_host_liveness: bool,
 ) -> Result<()> {
     if endpoint.starts_with("unix://") {
         let path = parse_unix_endpoint(endpoint)?;
@@ -1932,7 +2034,9 @@ async fn serve_worker_service(
         let listener = UnixListener::bind(&path).map_err(|err| {
             WorkerSdkError::Transport(format!("failed to bind worker socket: {err}"))
         })?;
-        let shutdown = service.shutdown.clone();
+        if monitor_host_liveness {
+            start_host_liveness_watcher(service.shutdown.clone())?;
+        }
         service
             .health_reporter
             .set_serving::<PluginWorkerServer<WorkerService>>()
@@ -1942,16 +2046,26 @@ async fn serve_worker_service(
                 service.health_reporter.clone(),
             ),
         );
-        return Server::builder()
+        Server::builder()
             .add_service(health_service)
             .add_service(worker_grpc_service(service))
-            .serve_with_incoming_shutdown(UnixListenerStream::new(listener), async move {
-                shutdown.notified().await
-            })
+            .serve_with_incoming_shutdown(
+                UnixListenerStream::new(listener),
+                wait_for_worker_shutdown(shutdown.clone()),
+            )
             .await
-            .map_err(|err| WorkerSdkError::Transport(err.to_string()));
+            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?;
+        finish_worker_shutdown(&shutdown);
+        return Ok(());
     }
-    serve_tcp_worker_service(service, endpoint, endpoint_file).await
+    serve_tcp_worker_service(
+        service,
+        endpoint,
+        endpoint_file,
+        shutdown,
+        monitor_host_liveness,
+    )
+    .await
 }
 
 #[cfg(not(unix))]
@@ -1959,13 +2073,22 @@ async fn serve_worker_service(
     service: WorkerService,
     endpoint: &str,
     endpoint_file: Option<&Path>,
+    shutdown: watch::Receiver<Option<ShutdownReason>>,
+    monitor_host_liveness: bool,
 ) -> Result<()> {
     if endpoint.starts_with("unix://") {
         return Err(WorkerSdkError::InvalidInput(
             "unix endpoints are not supported on this platform".into(),
         ));
     }
-    serve_tcp_worker_service(service, endpoint, endpoint_file).await
+    serve_tcp_worker_service(
+        service,
+        endpoint,
+        endpoint_file,
+        shutdown,
+        monitor_host_liveness,
+    )
+    .await
 }
 
 /// Publishes the resolved TCP endpoint and serves execution RPCs with finite caps.
@@ -1973,6 +2096,8 @@ async fn serve_tcp_worker_service(
     service: WorkerService,
     endpoint: &str,
     endpoint_file: Option<&Path>,
+    shutdown: watch::Receiver<Option<ShutdownReason>>,
+    monitor_host_liveness: bool,
 ) -> Result<()> {
     let addr = parse_tcp_endpoint(endpoint)?;
     let listener = TcpListener::bind(addr)
@@ -1984,7 +2109,9 @@ async fn serve_tcp_worker_service(
         })?;
         write_endpoint_file(path, &format!("http://{local_addr}"))?;
     }
-    let shutdown = service.shutdown.clone();
+    if monitor_host_liveness {
+        start_host_liveness_watcher(service.shutdown.clone())?;
+    }
     service
         .health_reporter
         .set_serving::<PluginWorkerServer<WorkerService>>()
@@ -1995,11 +2122,18 @@ async fn serve_tcp_worker_service(
     Server::builder()
         .add_service(health_service)
         .add_service(worker_grpc_service(service))
-        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
-            shutdown.notified().await
-        })
+        .serve_with_incoming_shutdown(
+            TcpListenerStream::new(listener),
+            wait_for_worker_shutdown(shutdown.clone()),
+        )
         .await
-        .map_err(|err| WorkerSdkError::Transport(err.to_string()))
+        .map_err(|err| WorkerSdkError::Transport(err.to_string()))?;
+    finish_worker_shutdown(&shutdown);
+    Ok(())
+}
+
+async fn wait_for_worker_shutdown(mut shutdown: watch::Receiver<Option<ShutdownReason>>) {
+    let _ = shutdown.wait_for(|reason| reason.is_some()).await;
 }
 
 /// Applies the runtime's execution limit to both sides of the worker service.
@@ -2019,7 +2153,6 @@ type InstalledRegistration = (Map<String, Json>, wire::RegistrationPlan);
 #[derive(Clone)]
 struct WorkerService {
     health_reporter: tonic_health::server::HealthReporter,
-    shutdown: Arc<tokio::sync::Notify>,
     draining: Arc<std::sync::atomic::AtomicBool>,
     registration: Arc<tokio::sync::Mutex<Option<InstalledRegistration>>>,
     registration_cancel: watch::Sender<bool>,
@@ -2028,6 +2161,7 @@ struct WorkerService {
     handlers: Arc<Mutex<WorkerHandlers>>,
     active_invocations: Arc<Mutex<HashMap<String, ActiveInvocation>>>,
     next_invocation_generation: Arc<AtomicU64>,
+    shutdown: watch::Sender<Option<ShutdownReason>>,
 }
 
 struct ActiveInvocation {
@@ -2088,6 +2222,53 @@ impl<F: Future> Future for InvocationFuture<F> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().future.as_mut().poll(cx)
     }
+}
+
+#[must_use = "dropping an unopened gate aborts its invocation"]
+struct InvocationGate {
+    start: Option<tokio::sync::oneshot::Sender<()>>,
+    abort_handle: tokio::task::AbortHandle,
+}
+
+impl InvocationGate {
+    fn open(mut self) {
+        if let Some(start) = self.start.take() {
+            let _ = start.send(());
+        }
+    }
+}
+
+impl Drop for InvocationGate {
+    fn drop(&mut self) {
+        if self.start.is_some() {
+            self.abort_handle.abort();
+        }
+    }
+}
+
+fn spawn_gated_invocation<F>(
+    future: F,
+    completion: Arc<InvocationCompletion>,
+) -> (tokio::task::JoinHandle<F::Output>, InvocationGate)
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(InvocationFuture {
+        future: Box::pin(async move {
+            match start_rx.await {
+                Ok(()) => future.await,
+                Err(_) => std::future::pending().await,
+            }
+        }),
+        _completion: completion,
+    });
+    let gate = InvocationGate {
+        start: Some(start_tx),
+        abort_handle: task.abort_handle(),
+    };
+    (task, gate)
 }
 
 struct ActiveInvocationGuard {
@@ -2378,24 +2559,15 @@ impl PluginWorker for WorkerService {
         service.runtime.callback_name = Some(request.registration_name.clone());
         let (completion_tx, completion_rx) = watch::channel(false);
         let completion = InvocationCompletion::new(completion_tx);
-        let task = tokio::spawn(InvocationFuture {
-            future: Box::pin(async move { service.invoke_inner(request).await }),
-            _completion: Arc::clone(&completion),
-        });
+        let (task, gate) = spawn_gated_invocation(
+            async move { service.invoke_inner(request).await },
+            Arc::clone(&completion),
+        );
         let abort_handle = task.abort_handle();
-        let generation = match self.track_invocation(
-            &invocation_id,
-            abort_handle.clone(),
-            None,
-            completion_rx,
-        ) {
-            Ok(generation) => generation,
-            Err(err) => {
-                task.abort();
-                return Err(err);
-            }
-        };
+        let generation =
+            self.track_invocation(&invocation_id, abort_handle.clone(), None, completion_rx)?;
         completion.track(self, &invocation_id, generation);
+        gate.open();
         let mut abort_on_drop = AbortTaskOnDrop::new(abort_handle);
         let response = match task.await {
             Ok(response) => response,
@@ -2477,8 +2649,8 @@ impl PluginWorker for WorkerService {
         let open_completion = Arc::clone(&completion);
         let open_scope = scope.clone();
         let open_callback = callback_name.clone();
-        let open_task = tokio::spawn(InvocationFuture {
-            future: Box::pin(async move {
+        let (open_task, open_gate) = spawn_gated_invocation(
+            async move {
                 TASK_CALLBACK_NAME
                     .scope(
                         Some(open_callback),
@@ -2490,23 +2662,18 @@ impl PluginWorker for WorkerService {
                         }),
                     )
                     .await
-            }),
-            _completion: open_completion,
-        });
+            },
+            open_completion,
+        );
         let open_abort_handle = open_task.abort_handle();
-        let generation = match self.track_invocation(
+        let generation = self.track_invocation(
             &invocation_id,
             open_abort_handle.clone(),
             Some(stream_cancel_tx.clone()),
             completion_rx.clone(),
-        ) {
-            Ok(generation) => generation,
-            Err(err) => {
-                open_task.abort();
-                return Err(err);
-            }
-        };
+        )?;
         completion.track(self, &invocation_id, generation);
+        open_gate.open();
         let mut abort_on_drop = AbortTaskOnDrop::new(open_abort_handle);
         let stream = match open_task.await {
             Ok(Ok(stream)) => stream,
@@ -2754,7 +2921,7 @@ impl PluginWorker for WorkerService {
         if let Some(diagnostics) = self.runtime.diagnostics.get() {
             let _ = diagnostics.close(std::time::Duration::from_secs(2)).await;
         }
-        self.shutdown.notify_one();
+        request_shutdown(&self.shutdown, ShutdownReason::HostRequest);
         Ok(Response::new(ShutdownResponse {}))
     }
 }
@@ -2862,7 +3029,7 @@ impl WorkerService {
             .active_invocations
             .lock()
             .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
-        if self.draining.load(Ordering::Acquire) {
+        if self.draining.load(Ordering::Acquire) || self.shutdown.borrow().is_some() {
             return Err(Status::failed_precondition("worker is draining"));
         }
         if active.contains_key(invocation_id) {

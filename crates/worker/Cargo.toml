@@ -31,5 +31,11 @@ tokio-stream = { workspace = true, default-features = true, features = ["net", "
 tonic = { workspace = true, features = ["codegen", "router", "transport"] }
 tower = { workspace = true, features = ["util"] }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 nemo-relay-plugin.workspace = true

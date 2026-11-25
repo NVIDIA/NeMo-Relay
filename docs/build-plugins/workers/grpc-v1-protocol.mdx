@@ -48,6 +48,22 @@ replies carry a typed `WorkerIdentity`. The following table describes each RPC:
 The SDKs also expose standard `grpc.health.v1.Health` `Check` and `Watch` probes.
 These are separate from the authenticated worker lifecycle `Health` RPC.
 
+### Host Liveness
+
+Relay launches a worker with a pipe on standard input and keeps the write end for
+the life of the activation. A worker whose standard input is a pipe must stop when
+it reads EOF, because EOF confirms that the Relay host closed or exited. On Unix,
+Relay starts each worker as the leader of its own process group and terminates
+that group when it stops the worker. A worker that leads its own process group
+and stops because of EOF must terminate that group before it exits, so its child
+processes do not outlive the host. The Rust and Python worker SDKs implement this
+behavior.
+
+Do not infer host death from a failed RPC or gRPC connectivity state. Local
+transport failures can be transient. Older hosts give workers the null device
+instead of a pipe. Those workers continue to rely on the authenticated `Shutdown`
+RPC.
+
 ## Registration Surfaces
 
 The `InvokeRequest.invocation` oneof selects the callback type. There is no

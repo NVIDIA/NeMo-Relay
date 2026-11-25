@@ -105,6 +105,49 @@ impl Drop for InheritedHandles {
     }
 }
 
+#[cfg(windows)]
+struct JobObject(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for JobObject {
+    fn drop(&mut self) {
+        // SAFETY: This wrapper uniquely owns the Job Object handle.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+#[cfg(windows)]
+fn create_job_object() -> std::io::Result<JobObject> {
+    use windows_sys::Win32::System::JobObjects::{
+        CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, SetInformationJobObject,
+    };
+
+    // SAFETY: Null security attributes and name request a private, unnamed Job Object.
+    let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if handle.is_null() {
+        return Err(windows_spawn_error("CreateJobObjectW detached child"));
+    }
+    let job = JobObject(handle);
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: `job.0` is live and `limits` matches the requested information class.
+    if unsafe {
+        SetInformationJobObject(
+            job.0,
+            JobObjectExtendedLimitInformation,
+            std::ptr::from_ref(&limits).cast(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error(
+            "SetInformationJobObject detached child",
+        ));
+    }
+    Ok(job)
+}
+
 #[cfg(not(windows))]
 pub(crate) type DetachedChild = Child;
 
@@ -112,11 +155,122 @@ pub(crate) type DetachedChild = Child;
 pub(crate) struct DetachedChild {
     process: windows_sys::Win32::Foundation::HANDLE,
     thread: windows_sys::Win32::Foundation::HANDLE,
+    job: JobObject,
+    waiter: std::sync::Arc<ProcessWaiter>,
     id: u32,
 }
 
 #[cfg(windows)]
+// SAFETY: The process, thread, and Job Object handles are owned by this value and are only
+// used through it.
 unsafe impl Send for DetachedChild {}
+
+#[cfg(windows)]
+struct ProcessWaiter(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+// SAFETY: The wrapper owns a duplicated process handle that only the waiting thread uses.
+unsafe impl Send for ProcessWaiter {}
+
+#[cfg(windows)]
+// SAFETY: Waiting on a live process handle is thread-safe, and the wrapper never mutates it.
+unsafe impl Sync for ProcessWaiter {}
+
+#[cfg(windows)]
+const JOB_DRAIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
+
+#[cfg(windows)]
+fn duplicate_process_handle(
+    process: windows_sys::Win32::Foundation::HANDLE,
+) -> std::io::Result<ProcessWaiter> {
+    use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    let mut duplicate = std::ptr::null_mut();
+    // SAFETY: The pseudo current-process handle, the live process handle, and the output
+    // pointer are valid for this call.
+    if unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            process,
+            GetCurrentProcess(),
+            &mut duplicate,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error("DuplicateHandle process wait"));
+    }
+    Ok(ProcessWaiter(duplicate))
+}
+
+#[cfg(windows)]
+fn job_has_active_processes(job: &JobObject) -> std::io::Result<bool> {
+    use windows_sys::Win32::System::JobObjects::{
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
+        QueryInformationJobObject,
+    };
+
+    let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+    // SAFETY: `job.0` is live and the buffer matches the requested information class.
+    if unsafe {
+        QueryInformationJobObject(
+            job.0,
+            JobObjectBasicAccountingInformation,
+            std::ptr::from_mut(&mut accounting).cast(),
+            std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error(
+            "QueryInformationJobObject active processes",
+        ));
+    }
+    Ok(accounting.ActiveProcesses != 0)
+}
+
+#[cfg(windows)]
+const DETACHED_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[cfg(windows)]
+fn wait_for_process(
+    process: windows_sys::Win32::Foundation::HANDLE,
+    timeout: std::time::Duration,
+) -> std::io::Result<bool> {
+    use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+    let millis = u32::try_from(timeout.as_millis()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "process wait timeout exceeds the Win32 millisecond range",
+        )
+    })?;
+    // SAFETY: The caller owns `process` for the duration of this call.
+    match unsafe { WaitForSingleObject(process, millis) } {
+        WAIT_OBJECT_0 => Ok(true),
+        WAIT_TIMEOUT => Ok(false),
+        _ => Err(std::io::Error::last_os_error()),
+    }
+}
+
+#[cfg(windows)]
+impl ProcessWaiter {
+    fn wait(&self, timeout: std::time::Duration) -> std::io::Result<bool> {
+        wait_for_process(self.0, timeout)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ProcessWaiter {
+    fn drop(&mut self) {
+        // SAFETY: This wrapper uniquely owns the duplicated process handle.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
 
 #[cfg(windows)]
 impl DetachedChild {
@@ -146,23 +300,52 @@ impl DetachedChild {
     }
 
     pub(crate) fn start_kill(&mut self) -> std::io::Result<()> {
-        // SAFETY: The process handle is owned and remains live throughout this call.
-        if unsafe { windows_sys::Win32::System::Threading::TerminateProcess(self.process, 1) } == 0
+        // SAFETY: `self.job` is the private Job Object owned by this value.
+        if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job.0, 1) } == 0
         {
-            if self.try_wait()?.is_some() {
-                return Ok(());
-            }
-            return Err(std::io::Error::last_os_error());
+            return Err(windows_spawn_error("TerminateJobObject detached child"));
         }
         Ok(())
     }
 
-    pub(crate) async fn kill(&mut self) -> std::io::Result<()> {
-        self.start_kill()?;
-        while self.try_wait()?.is_none() {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    pub(crate) async fn wait_for_exit(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> std::io::Result<Option<std::process::ExitStatus>> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let waiter = std::sync::Arc::clone(&self.waiter);
+        let signaled = tokio::task::spawn_blocking(move || waiter.wait(timeout))
+            .await
+            .map_err(|error| {
+                std::io::Error::other(format!("process wait task failed: {error}"))
+            })??;
+        if !signaled {
+            return Ok(None);
         }
-        Ok(())
+        while job_has_active_processes(&self.job)? {
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(None);
+            }
+            tokio::time::sleep(JOB_DRAIN_POLL_INTERVAL).await;
+        }
+        self.try_wait()
+    }
+
+    pub(crate) fn wait_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> std::io::Result<Option<std::process::ExitStatus>> {
+        let deadline = std::time::Instant::now() + timeout;
+        if !wait_for_process(self.process, timeout)? {
+            return Ok(None);
+        }
+        while job_has_active_processes(&self.job)? {
+            if std::time::Instant::now() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(JOB_DRAIN_POLL_INTERVAL);
+        }
+        self.try_wait()
     }
 
     pub(crate) fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
@@ -198,17 +381,34 @@ fn spawn_with_handle_list(
     stdin: &std::fs::File,
     stdout: &std::fs::File,
     stderr: &std::fs::File,
-    prefer_breakaway: bool,
+    worker: bool,
 ) -> std::io::Result<DetachedChild> {
     use std::ffi::c_void;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation};
     use windows_sys::Win32::System::Threading::{
         CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT,
-        InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
-        STARTF_USESTDHANDLES, STARTUPINFOEXW, UpdateProcThreadAttribute,
+        InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+        UpdateProcThreadAttribute,
     };
 
+    let launcher_job = current_launcher_job()?;
+    let (creation_flags, limited_lifetime) =
+        windows_creation_flags(launcher_job.as_ref().map(|job| job.limit_flags));
+    if limited_lifetime
+        && launcher_job
+            .as_ref()
+            .is_some_and(|job| job.ui_restrictions != 0)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "the host Job Object sets UI restrictions and denies breakaway, so Relay cannot create the private Job Object that process-tree cleanup requires",
+        ));
+    }
+    let job = create_job_object()?;
+    let job_list = [job.0];
+    let program = wide_nul(command.get_program());
     let handles = [
         stdin.as_raw_handle().cast::<c_void>(),
         stdout.as_raw_handle().cast::<c_void>(),
@@ -228,7 +428,7 @@ fn spawn_with_handle_list(
 
     let mut attribute_bytes = 0;
     // SAFETY: A null first call obtains the required allocation size.
-    unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attribute_bytes) };
+    unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut attribute_bytes) };
     if attribute_bytes == 0 {
         return Err(windows_spawn_error(
             "InitializeProcThreadAttributeList sizing",
@@ -238,7 +438,7 @@ fn spawn_with_handle_list(
     let mut attribute_storage = vec![0_usize; words];
     let attribute_pointer = attribute_storage.as_mut_ptr().cast::<c_void>();
     // SAFETY: The aligned allocation has the size returned by the sizing call.
-    if unsafe { InitializeProcThreadAttributeList(attribute_pointer, 1, 0, &mut attribute_bytes) }
+    if unsafe { InitializeProcThreadAttributeList(attribute_pointer, 2, 0, &mut attribute_bytes) }
         == 0
     {
         return Err(windows_spawn_error("InitializeProcThreadAttributeList"));
@@ -259,8 +459,22 @@ fn spawn_with_handle_list(
     {
         return Err(windows_spawn_error("UpdateProcThreadAttribute handle list"));
     }
+    // SAFETY: `job_list` holds the live Job Object handle until the attribute list is deleted.
+    if unsafe {
+        UpdateProcThreadAttribute(
+            attribute_list.0,
+            0,
+            PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+            job_list.as_ptr().cast(),
+            std::mem::size_of::<HANDLE>(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error("UpdateProcThreadAttribute job list"));
+    }
 
-    let program = wide_nul(command.get_program());
     let mut command_line = Vec::new();
     append_quoted(&mut command_line, command.get_program());
     for argument in command.get_args() {
@@ -281,8 +495,6 @@ fn spawn_with_handle_list(
     startup.StartupInfo.hStdError = handles[2] as HANDLE;
     startup.lpAttributeList = attribute_list.0;
     let mut process = PROCESS_INFORMATION::default();
-    let (in_job, limits) = current_windows_job_limits();
-    let (creation_flags, limited_lifetime) = windows_creation_flags(in_job, limits);
     // SAFETY: Every pointer references initialized storage that remains live for this call.
     let created = unsafe {
         CreateProcessW(
@@ -301,48 +513,90 @@ fn spawn_with_handle_list(
         )
     };
     let create_error = (created == 0).then(|| windows_spawn_error("CreateProcessW"));
+    drop(attribute_list);
+    drop(inherited);
     if let Some(error) = create_error {
         return Err(error);
     }
-    let mut child = DetachedChild {
-        process: process.hProcess,
-        thread: process.hThread,
-        id: process.dwProcessId,
-    };
-    if prefer_breakaway {
-        let mut child_in_job = 0;
-        // A nested parent job can retain the child even after breakaway from the immediate job.
-        // SAFETY: The process handle is owned here and the output pointer is valid.
-        let queried = unsafe {
-            windows_sys::Win32::System::JobObjects::IsProcessInJob(
-                child.process,
-                std::ptr::null_mut(),
-                &mut child_in_job,
-            )
-        };
-        let error = if queried == 0 {
-            Some(windows_spawn_error("IsProcessInJob worker verification"))
-        } else {
-            if child_in_job != 0 {
-                let reason = if limited_lifetime {
-                    "windows_job_breakaway_denied"
-                } else {
-                    "windows_parent_job_retained"
-                };
-                log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = reason; "Worker remains scoped to the host job; host shutdown can require reactivation");
-            }
-            None
-        };
-        if let Some(error) = error {
-            if let Err(cleanup) = child.start_kill().and_then(|()| child.wait().map(|_| ())) {
-                log::error!(target: "nemo_relay.bootstrap", event = "worker_breakaway_cleanup_failed",
-                    process_id = child.id(), error_kind = "io";
-                    "Failed to clean up worker after breakaway verification: {cleanup}");
+    let waiter = match duplicate_process_handle(process.hProcess) {
+        Ok(waiter) => std::sync::Arc::new(waiter),
+        Err(error) => {
+            // SAFETY: Both handles were returned by CreateProcessW and are unused after this
+            // point. Dropping `job` closes its only handle, and kill-on-close ends the child.
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(process.hThread);
+                windows_sys::Win32::Foundation::CloseHandle(process.hProcess);
             }
             return Err(error);
         }
+    };
+    let mut child = DetachedChild {
+        process: process.hProcess,
+        thread: process.hThread,
+        job,
+        waiter,
+        id: process.dwProcessId,
+    };
+    if let Err(error) = keep_job_alive_with_child(&child) {
+        return Err(abandon_spawned_child(&mut child, error));
+    }
+    if limited_lifetime {
+        if worker {
+            log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = "windows_job_breakaway_denied"; "Worker remains scoped to the host job; host shutdown can require reactivation");
+        } else {
+            log::warn!(target: "nemo_relay.bootstrap", event = "gateway_lifetime_limited", reason = "windows_job_breakaway_denied"; "The shared gateway lifetime is limited to the host job");
+        }
     }
     Ok(child)
+}
+
+#[cfg(windows)]
+fn keep_job_alive_with_child(child: &DetachedChild) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    let mut child_held_job = std::ptr::null_mut();
+    // SAFETY: The pseudo current-process handle, the owned job and process handles, and the
+    // output pointer are valid. The duplicate belongs to the child process and closes with it.
+    if unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            child.job.0,
+            child.process,
+            &mut child_held_job,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error(
+            "DuplicateHandle detached child Job Object",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn abandon_spawned_child(child: &mut DetachedChild, error: std::io::Error) -> std::io::Error {
+    if let Err(cleanup) = terminate_and_reap(child) {
+        log::error!(target: "nemo_relay.bootstrap", event = "detached_spawn_cleanup_failed",
+            process_id = child.id(), error_kind = "io";
+            "Failed to clean up detached child after a spawn failure: {cleanup}");
+    }
+    error
+}
+
+#[cfg(windows)]
+fn terminate_and_reap(child: &mut DetachedChild) -> std::io::Result<()> {
+    child.start_kill()?;
+    match child.wait_timeout(DETACHED_EXIT_TIMEOUT)? {
+        Some(_) => Ok(()),
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "detached child did not exit after termination",
+        )),
+    }
 }
 
 #[cfg(windows)]
@@ -471,39 +725,44 @@ pub(crate) const WINDOWS_JOB_OBJECT_LIMIT_BREAKAWAY_OK: u32 = 0x0000_0800;
 pub(crate) const WINDOWS_JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK: u32 = 0x0000_1000;
 
 #[cfg(any(test, windows))]
-pub(crate) fn windows_creation_flags(in_job: bool, job_limit_flags: Option<u32>) -> (u32, bool) {
+pub(crate) fn windows_creation_flags(job_limit_flags: Option<u32>) -> (u32, bool) {
     let base = WINDOWS_CREATE_NEW_PROCESS_GROUP | WINDOWS_CREATE_NO_WINDOW;
-    if !in_job {
-        return (base, false);
-    }
     match job_limit_flags {
+        None => (base, false),
         Some(flags) if flags & WINDOWS_JOB_OBJECT_LIMIT_BREAKAWAY_OK != 0 => {
             (base | WINDOWS_CREATE_BREAKAWAY_FROM_JOB, false)
         }
         Some(flags) if flags & WINDOWS_JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK != 0 => (base, false),
-        Some(_) | None => (base, true),
+        Some(_) => (base, true),
     }
 }
 
 #[cfg(windows)]
-fn current_windows_job_limits() -> (bool, Option<u32>) {
+struct LauncherJob {
+    limit_flags: u32,
+    ui_restrictions: u32,
+}
+
+#[cfg(windows)]
+fn current_launcher_job() -> std::io::Result<Option<LauncherJob>> {
     use windows_sys::Win32::System::JobObjects::{
-        IsProcessInJob, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        QueryInformationJobObject,
+        IsProcessInJob, JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, QueryInformationJobObject,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
     let mut in_job = 0;
     // SAFETY: The pseudo current-process handle and null current-job handle are valid here.
     if unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut in_job) } == 0 {
-        return (true, None);
+        return Err(windows_spawn_error("IsProcessInJob launcher"));
     }
     if in_job == 0 {
-        return (false, Some(0));
+        return Ok(None);
     }
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    // SAFETY: The output buffer matches the requested information class.
-    let queried = unsafe {
+    // SAFETY: A null job handle queries the calling process's job and the buffer matches the
+    // requested information class.
+    if unsafe {
         QueryInformationJobObject(
             std::ptr::null_mut(),
             JobObjectExtendedLimitInformation,
@@ -511,29 +770,36 @@ fn current_windows_job_limits() -> (bool, Option<u32>) {
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             std::ptr::null_mut(),
         )
-    };
-    if queried == 0 {
-        (true, None)
-    } else {
-        (true, Some(limits.BasicLimitInformation.LimitFlags))
+    } == 0
+    {
+        return Err(windows_spawn_error(
+            "QueryInformationJobObject launcher limits",
+        ));
     }
+    let mut restrictions = JOBOBJECT_BASIC_UI_RESTRICTIONS::default();
+    // SAFETY: A null job handle queries the calling process's job and the buffer matches the
+    // requested information class.
+    if unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectBasicUIRestrictions,
+            std::ptr::from_mut(&mut restrictions).cast(),
+            std::mem::size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error(
+            "QueryInformationJobObject launcher UI restrictions",
+        ));
+    }
+    Ok(Some(LauncherJob {
+        limit_flags: limits.BasicLimitInformation.LimitFlags,
+        ui_restrictions: restrictions.UIRestrictionsClass,
+    }))
 }
 
-#[cfg(windows)]
-pub(crate) fn configure_detached(_command: &mut Command) {
-    let (in_job, limits) = current_windows_job_limits();
-    let (_, limited_lifetime) = windows_creation_flags(in_job, limits);
-    if limited_lifetime {
-        log::warn!(
-            target: "nemo_relay.bootstrap",
-            event = "gateway_lifetime_limited",
-            reason = "windows_job_breakaway_denied";
-            "The shared gateway lifetime is limited to the host job"
-        );
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 pub(crate) fn configure_detached(_command: &mut Command) {}
 
 pub(crate) fn terminate_tree(child: &mut DetachedChild) {
@@ -544,28 +810,25 @@ pub(crate) fn terminate_tree(child: &mut DetachedChild) {
         if unsafe { libc::kill(process_group, libc::SIGKILL) } == -1 {
             let _ = child.kill();
         }
+        let _ = child.wait();
     }
     #[cfg(windows)]
     {
-        let status = Command::new("taskkill")
-            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-            .status();
-        if !status.is_ok_and(|status| status.success()) {
+        if let Err(error) = terminate_and_reap(child) {
             log::error!(
                 target: "nemo_relay.bootstrap",
                 event = "gateway_cleanup_failed",
                 process_id = child.id(),
-                reason = "taskkill_failed";
-                "Detached gateway process cleanup failed"
+                reason = "process_tree_termination_failed";
+                "Detached gateway process cleanup failed: {error}"
             );
-            return;
         }
     }
     #[cfg(not(any(unix, windows)))]
     {
         let _ = child.kill();
+        let _ = child.wait();
     }
-    let _ = child.wait();
 }
 
 #[cfg(all(test, windows))]

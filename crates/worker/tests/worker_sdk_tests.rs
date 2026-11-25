@@ -432,9 +432,11 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .expect("shutdown returns ack")
         .into_inner();
     assert!(shutdown == pb::ShutdownResponse::default());
-    assert!(shutdown == pb::ShutdownResponse::default());
-
-    handle.abort();
+    tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("shutdown stops the worker")
+        .expect("worker task joins")
+        .expect("worker exits cleanly");
 }
 
 #[tokio::test(flavor = "multi_thread")]

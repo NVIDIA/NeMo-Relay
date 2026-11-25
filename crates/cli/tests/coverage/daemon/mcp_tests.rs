@@ -20,7 +20,8 @@ fn pending_worker_child_fixture() {
 
 async fn pending_worker_fixture() -> (ActivationChild, SocketAddr) {
     use tokio::io::AsyncBufReadExt as _;
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .args([
             "--exact",
             "daemon::mcp::tests::pending_worker_child_fixture",
@@ -28,12 +29,13 @@ async fn pending_worker_fixture() -> (ActivationChild, SocketAddr) {
         ])
         .env("NEMO_RELAY_TEST_PENDING_WORKER_FIXTURE", "1")
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stdout(std::process::Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().unwrap();
     let stdout = child.stdout.take().unwrap();
     let child = ActivationChild {
-        child: child.into(),
+        child: WorkerChild::try_from(child).unwrap(),
         published: false,
         publication_uncertain: false,
     };
@@ -558,6 +560,65 @@ async fn launcher_process_group_cleanup_preserves_detached_worker() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+#[expect(
+    clippy::zombie_processes,
+    reason = "the leader exits and leaves its child behind in the process group"
+)]
+fn exiting_worker_leader_fixture() {
+    if std::env::var_os("NEMO_RELAY_TEST_EXITING_LEADER_FIXTURE").is_none() {
+        return;
+    }
+    let child = std::process::Command::new("sleep")
+        .arg("600")
+        .spawn()
+        .unwrap();
+    println!("{}", child.id());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reaping_an_exited_worker_leader_signals_its_group_first() {
+    use tokio::io::AsyncBufReadExt as _;
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "daemon::mcp::tests::exiting_worker_leader_fixture",
+            "--nocapture",
+        ])
+        .env("NEMO_RELAY_TEST_EXITING_LEADER_FIXTURE", "1")
+        .stdout(std::process::Stdio::piped())
+        .process_group(0);
+    let mut child = command.spawn().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut worker = WorkerChild::try_from(child).unwrap();
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+    loop {
+        let line = lines
+            .next_line()
+            .await
+            .unwrap()
+            .expect("the fixture prints its child pid");
+        if line.trim().parse::<libc::pid_t>().is_ok() {
+            break;
+        }
+    }
+    let status = worker
+        .wait_for_exit(Duration::from_secs(10))
+        .await
+        .unwrap()
+        .expect("the leader exits on its own");
+    assert!(status.success());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while lines.next_line().await.unwrap().is_some() {}
+    })
+    .await
+    .expect("the grandchild holding the pipe dies with the worker group");
+    worker.start_kill().unwrap();
+}
+
 #[cfg(windows)]
 #[test]
 fn detached_windows_worker_process_fixture() {
@@ -600,27 +661,19 @@ fn detached_windows_worker_launcher_fixture() {
         ])
         .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_WORKER", "1");
     let stderr = std::fs::File::create(path.with_extension("stderr")).unwrap();
+    if std::env::var_os("NEMO_RELAY_TEST_WINDOWS_EXPECT_SPAWN_ERROR").is_some() {
+        let error = crate::process::detached::spawn_worker_detached(&command, &stderr)
+            .err()
+            .expect("a UI-restricted job that denies breakaway rejects the launch");
+        std::fs::write(path.with_extension("error"), error.to_string()).unwrap();
+        return;
+    }
     if std::env::var_os("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED").is_some() {
         let logging = windows_worker_fixture_logging(&path.with_extension("jsonl"));
-        let (mut child, _bootstrap) =
+        let (child, _bootstrap) =
             crate::process::detached::spawn_worker_detached(&command, &stderr).unwrap();
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::JobObjects::IsProcessInJob;
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
-        // Verify confinement without changing or bypassing the enclosing job's policy.
-        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, child.id()) };
-        assert!(!process.is_null());
-        let mut in_job = 0;
-        let queried = unsafe { IsProcessInJob(process, std::ptr::null_mut(), &mut in_job) };
-        unsafe { CloseHandle(process) };
-        child.start_kill().unwrap();
-        child.wait().unwrap();
-        assert_ne!(queried, 0);
-        assert_ne!(in_job, 0, "worker escaped the restrictive parent job");
         logging.shutdown();
-        std::fs::write(path, "host_scoped").unwrap();
+        std::fs::write(path.with_extension("pid"), child.id().to_string()).unwrap();
         return;
     }
     let (child, _bootstrap) =
@@ -690,8 +743,14 @@ async fn launcher_job_cleanup_preserves_explicitly_detached_worker() {
 #[tokio::test]
 async fn restrictive_external_job_fixture() {
     use std::os::windows::io::{FromRawHandle, OwnedHandle};
-    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+    };
     let Some(path) = std::env::var_os("NEMO_RELAY_TEST_WINDOWS_EXTERNAL_JOB") else {
         return;
     };
@@ -706,25 +765,250 @@ async fn restrictive_external_job_fixture() {
     );
     let path = std::path::PathBuf::from(path);
     let logging = windows_worker_fixture_logging(&path.with_extension("failed.jsonl"));
-    // Exercise direct breakaway denial before SupervisedChild adds a nested Relay job.
     let missing_worker = std::process::Command::new(path.with_extension("missing.exe"));
     let stderr = std::fs::File::create(path.with_extension("failed.stderr")).unwrap();
     assert!(crate::process::detached::spawn_worker_detached(&missing_worker, &stderr).is_err());
     logging.shutdown();
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args([
-            "--exact",
-            "daemon::mcp::tests::detached_windows_worker_launcher_fixture",
-        ])
-        .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID", &path)
-        .env("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED", "1")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let mut launcher = crate::process::SupervisedChild::spawn(&mut command)
-        .await
-        .unwrap();
-    assert!(launcher.wait().await.unwrap().success());
+    let launcher_args = [
+        "--exact",
+        "daemon::mcp::tests::detached_windows_worker_launcher_fixture",
+    ];
+    for (label, supervised) in [("direct", false), ("nested", true)] {
+        let base = path.with_file_name(label);
+        if supervised {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(launcher_args)
+                .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID", &base)
+                .env("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED", "1")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let mut launcher = crate::process::SupervisedChild::spawn(&mut command)
+                .await
+                .unwrap();
+            assert!(launcher.wait().await.unwrap().success());
+        } else {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(launcher_args)
+                .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID", &base)
+                .env("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED", "1")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        let worker_pid: u32 = std::fs::read_to_string(base.with_extension("pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // SAFETY: OpenProcess returns a separately owned handle, closed after the checks below.
+        let worker = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+                0,
+                worker_pid,
+            )
+        };
+        assert!(!worker.is_null());
+        let mut in_job = 0;
+        // SAFETY: Both handles are live and the output pointer is valid.
+        let queried = unsafe { IsProcessInJob(worker, raw_job, &mut in_job) };
+        // SAFETY: The handle has termination rights.
+        let terminated = unsafe { TerminateProcess(worker, 1) };
+        // SAFETY: The handle has synchronization rights and is still open.
+        let waited = unsafe { WaitForSingleObject(worker, 5000) };
+        // SAFETY: The handle was opened above and is not used after this call.
+        unsafe { CloseHandle(worker) };
+        assert_ne!(queried, 0);
+        assert_ne!(
+            in_job, 0,
+            "{label} worker escaped the restrictive parent job"
+        );
+        assert_ne!(terminated, 0);
+        assert_eq!(waited, WAIT_OBJECT_0);
+    }
+    std::fs::write(path, "host_scoped").unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn ui_limited_external_job_fixture() {
+    use std::ffi::{OsString, c_void};
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::JobObjects::{
+        CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_UILIMIT_HANDLES,
+        JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, SetInformationJobObject,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CREATE_BREAKAWAY_FROM_JOB, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
+        InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_INFORMATION,
+        STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
+    };
+    let Some(path) = std::env::var_os("NEMO_RELAY_TEST_WINDOWS_UI_LIMITED_JOB") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(path);
+    // SAFETY: Null arguments create a private job. The owned handle closes it once.
+    let raw_job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    assert!(!raw_job.is_null());
+    // SAFETY: CreateJobObjectW returned an owned handle.
+    let _job = unsafe { OwnedHandle::from_raw_handle(raw_job) };
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: The job handle is live and the buffer matches the information class.
+    let limited = unsafe {
+        SetInformationJobObject(
+            raw_job,
+            JobObjectExtendedLimitInformation,
+            std::ptr::from_ref(&limits).cast(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    };
+    assert_ne!(limited, 0, "{}", std::io::Error::last_os_error());
+    let restrictions = JOBOBJECT_BASIC_UI_RESTRICTIONS {
+        UIRestrictionsClass: JOB_OBJECT_UILIMIT_HANDLES,
+    };
+    // SAFETY: The job handle is live and the buffer matches the information class.
+    let restricted = unsafe {
+        SetInformationJobObject(
+            raw_job,
+            JobObjectBasicUIRestrictions,
+            std::ptr::from_ref(&restrictions).cast(),
+            std::mem::size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+        )
+    };
+    assert_ne!(restricted, 0, "{}", std::io::Error::last_os_error());
+
+    let mut attribute_bytes = 0;
+    // SAFETY: A null first call obtains the required allocation size.
+    unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attribute_bytes) };
+    let mut attribute_storage =
+        vec![0_usize; attribute_bytes.div_ceil(std::mem::size_of::<usize>())];
+    let attribute_list = attribute_storage.as_mut_ptr().cast::<c_void>();
+    // SAFETY: The aligned allocation has the size returned by the sizing call.
+    let initialized =
+        unsafe { InitializeProcThreadAttributeList(attribute_list, 1, 0, &mut attribute_bytes) };
+    assert_ne!(initialized, 0, "{}", std::io::Error::last_os_error());
+    let job_list = [raw_job];
+    // SAFETY: `job_list` holds the live job handle until the attribute list is deleted.
+    let updated = unsafe {
+        UpdateProcThreadAttribute(
+            attribute_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+            job_list.as_ptr().cast(),
+            std::mem::size_of::<HANDLE>(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        )
+    };
+    assert_ne!(updated, 0, "{}", std::io::Error::last_os_error());
+
+    let exe = std::env::current_exe().unwrap();
+    let mut command_line: Vec<u16> = format!(
+        "\"{}\" --exact daemon::mcp::tests::detached_windows_worker_launcher_fixture",
+        exe.display()
+    )
+    .encode_utf16()
+    .collect();
+    command_line.push(0);
+    let mut environment = Vec::new();
+    for (key, value) in std::env::vars_os().chain([
+        (
+            OsString::from("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID"),
+            path.clone().into_os_string(),
+        ),
+        (
+            OsString::from("NEMO_RELAY_TEST_WINDOWS_EXPECT_SPAWN_ERROR"),
+            OsString::from("1"),
+        ),
+    ]) {
+        environment.extend(key.encode_wide());
+        environment.push(u16::from(b'='));
+        environment.extend(value.encode_wide());
+        environment.push(0);
+    }
+    environment.push(0);
+    let mut startup = STARTUPINFOEXW::default();
+    startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+    startup.lpAttributeList = attribute_list;
+    let mut process = PROCESS_INFORMATION::default();
+    // SAFETY: Every pointer references initialized storage that remains live for this call.
+    let created = unsafe {
+        CreateProcessW(
+            std::ptr::null(),
+            command_line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            CREATE_BREAKAWAY_FROM_JOB | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+            environment.as_mut_ptr().cast(),
+            std::ptr::null(),
+            (&raw const startup).cast(),
+            &mut process,
+        )
+    };
+    let create_error = std::io::Error::last_os_error();
+    // SAFETY: The attribute list was initialized above and is unused after this call.
+    unsafe { DeleteProcThreadAttributeList(attribute_list) };
+    assert_ne!(created, 0, "{create_error}");
+    // SAFETY: The process handle is owned until closed below.
+    let waited = unsafe { WaitForSingleObject(process.hProcess, 20_000) };
+    let mut exit_code = 0;
+    // SAFETY: The process handle is live and the output pointer is valid.
+    let queried = unsafe { GetExitCodeProcess(process.hProcess, &mut exit_code) };
+    // SAFETY: Both handles were returned by CreateProcessW and are unused after this point.
+    unsafe {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    assert_eq!(waited, WAIT_OBJECT_0);
+    assert_ne!(queried, 0);
+    assert_eq!(exit_code, 0, "the launcher fixture must exit cleanly");
+    let error = std::fs::read_to_string(path.with_extension("error")).unwrap();
+    assert!(
+        error.contains("UI restrictions and denies breakaway"),
+        "{error}"
+    );
+    std::fs::write(path, "ui_limited").unwrap();
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn worker_launch_from_a_ui_limited_job_reports_the_limitation() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("result");
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "daemon::mcp::tests::ui_limited_external_job_fixture",
+            ])
+            .env("NEMO_RELAY_TEST_WINDOWS_UI_LIMITED_JOB", &path)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "ui_limited");
+    let error = std::fs::read_to_string(path.with_extension("error")).unwrap();
+    assert!(
+        error.contains("UI restrictions and denies breakaway"),
+        "{error}"
+    );
 }
 
 #[cfg(windows)]
@@ -733,7 +1017,7 @@ async fn worker_starts_without_escaping_restrictive_external_parent_job() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("result");
     let output = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(20),
         Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -751,23 +1035,30 @@ async fn worker_starts_without_escaping_restrictive_external_parent_job() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "host_scoped");
-    let records: Vec<serde_json::Value> = std::fs::read_to_string(path.with_extension("jsonl"))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .filter(|record: &serde_json::Value| record["event"] == "worker_lifetime_limited")
-        .collect();
-    assert_eq!(records.len(), 1, "only the successful launch should warn");
-    assert!(matches!(
-        records[0]["fields"]["reason"].as_str(),
-        Some("windows_job_breakaway_denied" | "windows_parent_job_retained")
-    ));
-    let failed_records = std::fs::read_to_string(path.with_extension("failed.jsonl")).unwrap();
+    let lifetime_warnings = |file: &str| -> Vec<serde_json::Value> {
+        std::fs::read_to_string(path.with_file_name(file))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|record: &serde_json::Value| record["event"] == "worker_lifetime_limited")
+            .collect()
+    };
+    let direct = lifetime_warnings("direct.jsonl");
+    assert_eq!(
+        direct.len(),
+        1,
+        "a launcher whose own job denies breakaway warns once"
+    );
+    assert_eq!(
+        direct[0]["fields"]["reason"],
+        "windows_job_breakaway_denied"
+    );
     assert!(
-        failed_records.lines().all(|line| {
-            let record: serde_json::Value = serde_json::from_str(line).unwrap();
-            record["event"] != "worker_lifetime_limited"
-        }),
+        lifetime_warnings("nested.jsonl").is_empty(),
+        "a launcher whose own job permits breakaway cannot observe the external job"
+    );
+    assert!(
+        lifetime_warnings("result.failed.jsonl").is_empty(),
         "failed launches must not emit a worker lifetime warning"
     );
 }
@@ -831,21 +1122,21 @@ async fn launcher_sees_its_published_worker_exit() {
 
 /// A child that has already exited, standing in for a crashed worker.
 async fn exited_worker_child() -> ActivationChild {
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .args(["--exact", "daemon::mcp::tests::no_such_test"])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while child.try_wait().unwrap().is_none() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("the stand-in worker exits");
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = WorkerChild::try_from(command.spawn().unwrap()).unwrap();
+    child
+        .wait_for_exit(Duration::from_secs(10))
+        .await
+        .unwrap()
+        .expect("the stand-in worker exits");
     ActivationChild {
-        child: child.into(),
+        child,
         published: true,
         publication_uncertain: false,
     }
@@ -1161,4 +1452,40 @@ async fn a_timed_out_worker_exit_report_keeps_its_place_before_the_next_request(
     }
     assert_eq!(arrived, vec![("worker_exited", 1), ("release", 2)]);
     server.abort();
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn group_liveness_reports_live_members_and_ignores_zombies() {
+    use std::os::unix::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    let mut zombie_only = std::process::Command::new("true")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut mixed = std::process::Command::new("sh")
+        .args(["-c", "sleep 600 >/dev/null 2>&1 & exit 0"])
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let zombie_group = zombie_only.id() as libc::pid_t;
+    let mixed_group = mixed.id() as libc::pid_t;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while super::group_has_live_members(zombie_group).unwrap() {
+        assert!(Instant::now() < deadline, "the zombie-only leader exits");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(super::group_has_live_members(mixed_group).unwrap());
+    // SAFETY: A negative PID addresses the test-owned process group and dereferences no memory.
+    assert_eq!(unsafe { libc::kill(-mixed_group, libc::SIGKILL) }, 0);
+    while super::group_has_live_members(mixed_group).unwrap() {
+        assert!(
+            Instant::now() < deadline,
+            "the killed member leaves the group"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    zombie_only.wait().unwrap();
+    mixed.wait().unwrap();
 }
