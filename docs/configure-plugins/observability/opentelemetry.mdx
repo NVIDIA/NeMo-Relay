@@ -1325,10 +1325,11 @@ The gateway checks streams with the built-in streaming codec for the OpenAI
 Responses API. Relay treats `response.completed`,
 `response.failed`, and `response.incomplete` as final response events.
 
-When the first final event is `response.failed`, Relay forwards it and reports
-a stream error on the next read. Relay marks the LLM span as an error and
-includes the provider's error code and message in the status description when
-supplied. The gateway also sends its standard `error` event to the client.
+When the first final event is `response.failed`, or a standalone `error` event
+arrives before a final response, Relay forwards it and reports a stream error
+on the next read. Relay marks the LLM span as an error and includes the provider's
+error code and message in the status description when supplied. The gateway also
+sends its standard `error` event to the client.
 
 If the stream ends before a final response event, Relay returns a stream error
 and marks the span as an error. Relay logs `llm_stream_incomplete` with the reason

@@ -28,6 +28,9 @@ use crate::error::CliError;
 // Includes the full two-minute legal drain plus reconciliation margin before a replacement
 // activation is issued.
 const ACTIVATION_WAIT_MAX: Duration = Duration::from_secs(150);
+const ACTIVATION_CLEANUP_GRACE: Duration = Duration::from_secs(5);
+#[cfg(unix)]
+const WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const WORKER_ADVERTISE_ENV: &str = "NEMO_RELAY_WORKER_ADVERTISE_ADDRESS";
 const WORKER_PORT_ENV: &str = "NEMO_RELAY_WORKER_PORT";
 
@@ -395,43 +398,208 @@ fn optional_environment(name: &str) -> Result<Option<String>, CliError> {
 }
 
 enum WorkerChild {
-    Local(Child),
+    Local {
+        child: Child,
+        #[cfg(unix)]
+        process_group: Option<libc::pid_t>,
+    },
     #[cfg(windows)]
     Detached {
         child: crate::process::detached::DetachedChild,
         stdin: Option<tokio::fs::File>,
     },
 }
-impl From<Child> for WorkerChild {
-    fn from(child: Child) -> Self {
-        Self::Local(child)
+impl TryFrom<Child> for WorkerChild {
+    type Error = std::io::Error;
+
+    fn try_from(child: Child) -> Result<Self, Self::Error> {
+        #[cfg(unix)]
+        let process_group = Some(child.id().ok_or_else(|| {
+            std::io::Error::other("worker exited before its process group was recorded")
+        })? as libc::pid_t);
+        Ok(Self::Local {
+            child,
+            #[cfg(unix)]
+            process_group,
+        })
     }
 }
+
+#[cfg(unix)]
+fn signal_process_group(process_group: libc::pid_t) -> std::io::Result<()> {
+    // SAFETY: The worker called `setsid` before exec, so its PID is the process-group ID. A
+    // negative PID addresses that group and does not dereference memory.
+    if unsafe { libc::kill(-process_group, libc::SIGKILL) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    #[cfg(target_vendor = "apple")]
+    if error.raw_os_error() == Some(libc::EPERM) && !group_has_live_members(process_group)? {
+        return Ok(());
+    }
+    Err(error)
+}
+
+#[cfg(target_vendor = "apple")]
+const PROC_PGRP_ONLY: u32 = 2;
+
+#[cfg(target_vendor = "apple")]
+fn group_has_live_members(group: libc::pid_t) -> std::io::Result<bool> {
+    let group_id = u32::try_from(group).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "process group id is negative",
+        )
+    })?;
+    // SAFETY: A null buffer asks libproc for the byte count the member list needs.
+    let needed = unsafe { libc::proc_listpids(PROC_PGRP_ONLY, group_id, std::ptr::null_mut(), 0) };
+    if needed < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut members =
+        vec![0 as libc::pid_t; needed as usize / std::mem::size_of::<libc::pid_t>() + 8];
+    let capacity = libc::c_int::try_from(members.len() * std::mem::size_of::<libc::pid_t>())
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "process group member list is too large",
+            )
+        })?;
+    // SAFETY: `members` is a writable buffer of `capacity` bytes for the duration of the call.
+    let written = unsafe {
+        libc::proc_listpids(
+            PROC_PGRP_ONLY,
+            group_id,
+            members.as_mut_ptr().cast(),
+            capacity,
+        )
+    };
+    if written < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    members.truncate(written as usize / std::mem::size_of::<libc::pid_t>());
+    for member in members.into_iter().filter(|member| *member != 0) {
+        // SAFETY: `proc_bsdinfo` is a plain C struct for which all-zero bytes are a valid value.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // SAFETY: `info` is valid for `size` bytes of writes.
+        let returned = unsafe {
+            libc::proc_pidinfo(
+                member,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                std::ptr::from_mut(&mut info).cast(),
+                size,
+            )
+        };
+        if returned == size {
+            if info.pbi_status != libc::SZOMB {
+                return Ok(true);
+            }
+            continue;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn leader_has_exited(process_group: libc::pid_t) -> std::io::Result<bool> {
+    // SAFETY: `siginfo_t` is a plain C struct for which all-zero bytes are a valid value.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `info` is valid for writes. `WNOWAIT` reports the exit without reaping the
+    // leader, so its process-group ID stays reserved until the group has been signalled.
+    let waited = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            process_group as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if waited == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(info.si_signo == libc::SIGCHLD)
+}
+
 impl WorkerChild {
     fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         match self {
-            Self::Local(child) => child.try_wait(),
+            #[cfg(unix)]
+            Self::Local {
+                child,
+                process_group,
+            } => {
+                if let Some(group) = *process_group {
+                    if !leader_has_exited(group)? {
+                        return Ok(None);
+                    }
+                    signal_process_group(group)?;
+                    *process_group = None;
+                }
+                child.try_wait()
+            }
+            #[cfg(not(unix))]
+            Self::Local { child } => child.try_wait(),
             #[cfg(windows)]
             Self::Detached { child, .. } => child.try_wait(),
         }
     }
     fn start_kill(&mut self) -> std::io::Result<()> {
         match self {
-            Self::Local(child) => child.start_kill(),
+            #[cfg(unix)]
+            Self::Local { process_group, .. } => match *process_group {
+                Some(group) => signal_process_group(group),
+                None => Ok(()),
+            },
+            #[cfg(not(unix))]
+            Self::Local { child } => child.start_kill(),
             #[cfg(windows)]
             Self::Detached { child, .. } => child.start_kill(),
         }
     }
-    async fn kill(&mut self) -> std::io::Result<()> {
+    async fn wait_for_exit(
+        &mut self,
+        timeout: Duration,
+    ) -> std::io::Result<Option<std::process::ExitStatus>> {
         match self {
-            Self::Local(child) => child.kill().await,
+            #[cfg(unix)]
+            Self::Local {
+                child,
+                process_group,
+            } => {
+                if let Some(group) = *process_group {
+                    let deadline = tokio::time::Instant::now() + timeout;
+                    while !leader_has_exited(group)? {
+                        if tokio::time::Instant::now() >= deadline {
+                            return Ok(None);
+                        }
+                        tokio::time::sleep(WORKER_EXIT_POLL_INTERVAL).await;
+                    }
+                    signal_process_group(group)?;
+                    *process_group = None;
+                }
+                child.wait().await.map(Some)
+            }
+            #[cfg(not(unix))]
+            Self::Local { child } => match tokio::time::timeout(timeout, child.wait()).await {
+                Ok(status) => status.map(Some),
+                Err(_) => Ok(None),
+            },
             #[cfg(windows)]
-            Self::Detached { child, .. } => child.kill().await,
+            Self::Detached { child, .. } => child.wait_for_exit(timeout).await,
         }
     }
     fn take_stdin(&mut self) -> Option<std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>> {
         match self {
-            Self::Local(child) => child.stdin.take().map(|stdin| Box::pin(stdin) as _),
+            Self::Local { child, .. } => child.stdin.take().map(|stdin| Box::pin(stdin) as _),
             #[cfg(windows)]
             Self::Detached { stdin, .. } => stdin.take().map(|stdin| Box::pin(stdin) as _),
         }
@@ -468,6 +636,31 @@ impl Drop for ActivationChild {
     }
 }
 
+impl ActivationChild {
+    async fn force_cleanup(&mut self) -> std::io::Result<()> {
+        self.child.start_kill()?;
+        match self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await? {
+            Some(_) => Ok(()),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "worker did not exit after its process tree was killed",
+            )),
+        }
+    }
+
+    async fn graceful_cleanup(&mut self) -> std::io::Result<()> {
+        if let Err(error) = self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await {
+            log::warn!(
+                target: "nemo_relay.daemon.mcp",
+                event = "worker_graceful_wait_failed",
+                error_kind = "io";
+                "Waiting for the cancelled worker to exit failed: {error}"
+            );
+        }
+        self.force_cleanup().await
+    }
+}
+
 type PendingLaunch = Option<(String, ActivationChild, tokio::time::Instant)>;
 
 fn route_activation_timed_out(started: tokio::time::Instant, directive: &BrokerDirective) -> bool {
@@ -481,7 +674,7 @@ fn route_activation_timed_out(started: tokio::time::Instant, directive: &BrokerD
 #[cfg(test)]
 async fn stop_pending_launch(launched: &mut PendingLaunch) -> Result<(), CliError> {
     if let Some((_, mut child, _)) = launched.take() {
-        child.child.kill().await.map_err(CliError::Io)?;
+        child.force_cleanup().await.map_err(CliError::Io)?;
     }
     Ok(())
 }
@@ -517,14 +710,19 @@ async fn cleanup_pending_launch(
             Ok(Ok(super::common::control::ActivationCancellation::Published)) => {
                 child.published = true
             }
-            Ok(Ok(_)) => child.child.kill().await.map_err(CliError::Io)?,
+            Ok(Ok(super::common::control::ActivationCancellation::Cancelled)) => {
+                child.graceful_cleanup().await.map_err(CliError::Io)?
+            }
+            Ok(Ok(super::common::control::ActivationCancellation::Superseded)) => {
+                child.force_cleanup().await.map_err(CliError::Io)?
+            }
             _ => {
                 // The broker may already own this child. Its grant/control deadline owns cleanup.
                 child.publication_uncertain = true;
             }
         }
     } else if !child.published {
-        child.child.kill().await.map_err(CliError::Io)?;
+        child.force_cleanup().await.map_err(CliError::Io)?;
     }
     Ok(child.published.then_some((activation_id, child)))
 }
@@ -770,7 +968,7 @@ async fn launch_worker(
     #[cfg(not(windows))]
     let spawn = {
         let mut command = command;
-        command.spawn().map(WorkerChild::from)
+        command.spawn().and_then(WorkerChild::try_from)
     };
     #[cfg(windows)]
     let spawn = crate::process::detached::inherited_stderr()
@@ -858,17 +1056,12 @@ async fn launch_worker(
     }
     .await;
     if let Err(error) = transfer {
-        child
-            .child
-            .kill()
-            .await
-            .map_err(CliError::Io)
-            .map_err(|error| {
-                WorkerActivationError::new(
-                    WorkerActivationFailureReason::WorkerActivationCleanupFailed,
-                    error,
-                )
-            })?;
+        child.force_cleanup().await.map_err(|error| {
+            WorkerActivationError::new(
+                WorkerActivationFailureReason::WorkerActivationCleanupFailed,
+                CliError::Io(error),
+            )
+        })?;
         return Err(error);
     }
     child.publication_uncertain = true;

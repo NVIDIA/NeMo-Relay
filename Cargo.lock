@@ -2393,6 +2393,7 @@ dependencies = [
  "http-body",
  "hyper-util",
  "jsonschema",
+ "libc",
  "libloading 0.8.9",
  "log",
  "nemo-relay-codecs",
@@ -2577,6 +2578,7 @@ dependencies = [
  "nemo-relay-worker-proto",
  "prost",
  "prost-types",
+ "rustix",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2585,6 +2587,7 @@ dependencies = [
  "tonic",
  "tonic-health",
  "tower",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

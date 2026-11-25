@@ -303,7 +303,7 @@ async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
             let (completion_tx, completion_rx) = watch::channel(false);
             let service = WorkerService {
                 health_reporter: tonic_health::server::HealthReporter::new(),
-                shutdown: Arc::new(tokio::sync::Notify::new()),
+                shutdown: watch::channel(None).0,
                 draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 registration: Arc::new(tokio::sync::Mutex::new(None)),
                 registration_cancel: watch::channel(false).0,
@@ -365,7 +365,7 @@ async fn shutdown_rejects_stream_handoff_from_a_completed_opener() {
     }
     let service = WorkerService {
         health_reporter: tonic_health::server::HealthReporter::new(),
-        shutdown: Arc::new(tokio::sync::Notify::new()),
+        shutdown: watch::channel(None).0,
         draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         registration: Arc::new(tokio::sync::Mutex::new(None)),
         registration_cancel: watch::channel(false).0,
@@ -442,7 +442,7 @@ async fn repeated_shutdown_does_not_reopen_health_watches() {
     let (completion_tx, completion_rx) = watch::channel(false);
     let service = WorkerService {
         health_reporter: tonic_health::server::HealthReporter::new(),
-        shutdown: Arc::new(tokio::sync::Notify::new()),
+        shutdown: watch::channel(None).0,
         draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         registration: Arc::new(tokio::sync::Mutex::new(None)),
         registration_cancel: watch::channel(false).0,
@@ -553,7 +553,7 @@ async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback()
     let calls = Arc::new(AtomicU64::new(0));
     let service = WorkerService {
         health_reporter: tonic_health::server::HealthReporter::new(),
-        shutdown: Arc::new(tokio::sync::Notify::new()),
+        shutdown: watch::channel(None).0,
         draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         registration: Arc::new(tokio::sync::Mutex::new(None)),
         registration_cancel: watch::channel(false).0,
@@ -780,5 +780,43 @@ fn llm_context_decoder_refuses_wire_limits_and_recovers() {
         payload
             .execution_context(&disconnected_runtime(), "invocation", false)
             .unwrap();
+    }
+}
+
+#[test]
+fn the_first_shutdown_reason_wins() {
+    let (shutdown, receiver) = watch::channel(None);
+    request_shutdown(&shutdown, ShutdownReason::HostRequest);
+    request_shutdown(&shutdown, ShutdownReason::HostLost);
+    assert_eq!(*receiver.borrow(), Some(ShutdownReason::HostRequest));
+}
+
+#[tokio::test]
+async fn gated_invocation_runs_after_open_and_aborts_on_drop() {
+    use std::sync::atomic::AtomicBool;
+
+    for open in [false, true] {
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let (completion_tx, mut completion_rx) = watch::channel(false);
+        let (task, gate) = spawn_gated_invocation(
+            async move {
+                flag.store(true, Ordering::SeqCst);
+                "ran"
+            },
+            InvocationCompletion::new(completion_tx),
+        );
+        tokio::task::yield_now().await;
+        assert!(!ran.load(Ordering::SeqCst));
+        if open {
+            gate.open();
+            assert_eq!(task.await.unwrap(), "ran");
+        } else {
+            drop(gate);
+            assert!(task.await.unwrap_err().is_cancelled());
+        }
+        assert_eq!(ran.load(Ordering::SeqCst), open);
+        completion_rx.changed().await.unwrap();
+        assert!(*completion_rx.borrow());
     }
 }

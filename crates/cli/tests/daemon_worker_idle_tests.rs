@@ -35,6 +35,7 @@ struct Capture(Arc<Mutex<CapturedOutput>>);
 struct CapturedOutput {
     bytes: Vec<u8>,
     error: Option<String>,
+    finished: bool,
 }
 
 impl Capture {
@@ -60,8 +61,16 @@ impl Capture {
                     }
                 }
             }
+            destination.0.lock().unwrap().finished = true;
         });
         capture
+    }
+
+    async fn finished(&self) {
+        wait_until("captured output to reach EOF", || {
+            self.0.lock().unwrap().finished.then_some(())
+        })
+        .await;
     }
 
     fn text(&self) -> String {
@@ -99,6 +108,13 @@ struct Mcp {
 }
 
 impl Mcp {
+    async fn cancel(self) {
+        #[cfg(unix)]
+        self.terminate().await;
+        #[cfg(windows)]
+        self.finish().await;
+    }
+
     async fn finish(mut self) {
         // Closing stdin is the MCP host's normal shutdown request, not cancellation.
         drop(self.child.0.stdin.take());
@@ -159,12 +175,14 @@ impl ProcessIdentity {
     }
 
     fn cleanup(self) {
+        let _ = self.kill();
+    }
+
+    fn kill(self) -> bool {
         let system = processes(&[self.pid]);
-        if let Some(process) = system.process(self.pid)
-            && process.start_time() == self.started
-        {
-            let _ = process.kill();
-        }
+        system
+            .process(self.pid)
+            .is_some_and(|process| process.start_time() == self.started && process.kill())
     }
 }
 
@@ -183,6 +201,10 @@ struct IdleDaemon {
 
 impl IdleDaemon {
     async fn start(idle_seconds: u64) -> Self {
+        Self::launch(idle_seconds, false).await
+    }
+
+    async fn launch(idle_seconds: u64, spawn_plugin_child: bool) -> Self {
         use axum::{Json, Router, routing::post};
 
         let root = tempfile::tempdir().unwrap();
@@ -247,6 +269,7 @@ impl IdleDaemon {
         let records = vec![record];
         let dynamic = vec![json!({"manifest": manifest, "config": {
             "event_metadata_injector_only": true,
+            "spawn_child": spawn_plugin_child,
             "register_gate_directory": root.path().join("gate")
         }})];
         let policies = json!({"fixture_worker": {"attestation": "integrity_only"}});
@@ -395,11 +418,20 @@ impl IdleDaemon {
     }
 
     async fn entered(&mut self) {
+        self.entered_after(None).await;
+    }
+
+    async fn entered_after(&mut self, previous_plugin: Option<Pid>) {
         let path = self.root.path().join("gate/entered.json");
         let marker = wait_until("plugin registration gate", || {
             std::fs::read(&path)
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .filter(|marker| {
+                    previous_plugin.is_none_or(|previous| {
+                        marker["pid"].as_u64() != Some(u64::from(previous.as_u32()))
+                    })
+                })
         })
         .await;
         let plugin_pid = Pid::from_u32(marker["pid"].as_u64().unwrap().try_into().unwrap());
@@ -465,17 +497,7 @@ impl IdleDaemon {
     }
 
     async fn descendants_exited(&self) {
-        wait_until_deadline(
-            "task-owned worker and plugin exit",
-            Instant::now() + EXIT_WAIT,
-            || {
-                self.descendants
-                    .iter()
-                    .all(|process| !process.present())
-                    .then_some(())
-            },
-        )
-        .await;
+        descendants_exited(&self.descendants).await;
     }
 }
 
@@ -582,15 +604,187 @@ async fn wait_until_deadline<T>(
     }
 }
 
+async fn descendants_exited(descendants: &[ProcessIdentity]) {
+    wait_until_deadline(
+        "task-owned worker and plugin exit",
+        Instant::now() + EXIT_WAIT,
+        || {
+            descendants
+                .iter()
+                .all(|process| !process.present())
+                .then_some(())
+        },
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_initialization_reaps_worker_and_plugin() {
+    let mut daemon = IdleDaemon::start(0).await;
+    let mcp = daemon.mcp().await;
+    daemon.entered().await;
+    mcp.cancel().await;
+    daemon.descendants_exited().await;
+}
+
+async fn gone_within(processes: &[ProcessIdentity], deadline: Instant) -> bool {
+    loop {
+        if processes.iter().all(|process| !process.present()) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn plugin_child_identity(daemon: &IdleDaemon) -> ProcessIdentity {
+    let marker: Value = serde_json::from_slice(
+        &std::fs::read(daemon.root.path().join("gate/entered.json")).unwrap(),
+    )
+    .unwrap();
+    let pid = Pid::from_u32(
+        marker["child"]
+            .as_u64()
+            .expect("the fixture spawned a child")
+            .try_into()
+            .unwrap(),
+    );
+    let system = processes(&[pid]);
+    let process = system.process(pid).expect("plugin child exists");
+    ProcessIdentity {
+        pid,
+        started: process.start_time(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_child_exits_after_abrupt_worker_death_without_a_launcher() {
+    let mut daemon = IdleDaemon::launch(120, true).await;
+    let mcp = daemon.mcp().await;
+    daemon.entered().await;
+    let child = plugin_child_identity(&daemon);
+    let plugin = daemon.descendants[0];
+    let worker = daemon.descendants[1];
+    daemon.release_gate();
+    mcp.finish().await;
+    assert!(
+        worker.present() && plugin.present() && child.present(),
+        "the published worker tree outlives its launcher"
+    );
+    assert!(worker.kill(), "the worker is killed abruptly");
+    wait_until("abrupt Relay worker exit", || {
+        (!worker.present()).then_some(())
+    })
+    .await;
+    let exited = gone_within(&[plugin, child], Instant::now() + EXIT_WAIT).await;
+    child.cleanup();
+    assert!(
+        exited,
+        "the plugin and its child exit after abrupt host death"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_child_exits_after_orderly_worker_exit_without_a_launcher() {
+    let mut daemon = IdleDaemon::launch(2, true).await;
+    let mcp = daemon.mcp().await;
+    daemon.entered().await;
+    let child = plugin_child_identity(&daemon);
+    let plugin = daemon.descendants[0];
+    let worker = daemon.descendants[1];
+    daemon.release_gate();
+    daemon.ready().await;
+    mcp.finish().await;
+    let exited = gone_within(&[worker, plugin, child], Instant::now() + EXIT_WAIT).await;
+    child.cleanup();
+    assert!(
+        exited,
+        "the plugin and its child exit after orderly worker exit"
+    );
+    let captures: Vec<Capture> = daemon.mcp_logs.lock().unwrap().clone();
+    for capture in &captures {
+        capture.finished().await;
+    }
+    let stopped: Vec<Value> = captures
+        .iter()
+        .flat_map(|capture| capture.events("worker_stopped"))
+        .filter(|event| event["target"] == "nemo_relay.daemon.worker")
+        .collect();
+    assert_eq!(stopped.len(), 1, "the worker logs one orderly stop");
+    assert_eq!(stopped[0]["fields"]["outcome"], "success");
+    assert_eq!(stopped[0]["fields"]["reason"], "drained");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forced_worker_death_stops_its_plugin() {
+    let mut daemon = IdleDaemon::start(10).await;
+    let mcp = daemon.mcp().await;
+    daemon.entered().await;
+    let worker = daemon.descendants[1];
+    worker.cleanup();
+    wait_until("forced Relay worker exit", || {
+        (!worker.present()).then_some(())
+    })
+    .await;
+    daemon.descendants_exited().await;
+    mcp.cancel().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_cancellation_leaves_no_plugin_processes() {
+    let mut daemon = IdleDaemon::start(0).await;
+    let mut prior = Vec::new();
+    for _ in 0..3 {
+        let mcp = daemon.mcp().await;
+        daemon.entered().await;
+        let generation = daemon.descendants.clone();
+        mcp.cancel().await;
+        descendants_exited(&generation).await;
+        prior.extend(generation);
+        std::fs::remove_file(daemon.root.path().join("gate/entered.json")).unwrap();
+    }
+    assert!(prior.iter().all(|process| !process.present()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_generation_cleanup_preserves_replacement() {
+    let mut daemon = IdleDaemon::start(0).await;
+    let first = daemon.mcp().await;
+    daemon.entered().await;
+    let first_generation = daemon.descendants.clone();
+    let first_plugin = first_generation[0].pid;
+
+    let replacement_launch = async {
+        wait_until("first activation cancellation", || {
+            daemon
+                .logs
+                .events("mcp_control_disconnected")
+                .first()
+                .cloned()
+        })
+        .await;
+        let second = daemon.mcp().await;
+        daemon.entered_after(Some(first_plugin)).await;
+        (second, daemon.descendants.clone())
+    };
+    let ((), (second, replacement)) = tokio::join!(first.cancel(), replacement_launch);
+    descendants_exited(&first_generation).await;
+    assert!(
+        replacement.iter().all(|process| process.present()),
+        "cleanup for the cancelled generation must preserve its replacement"
+    );
+    second.cancel().await;
+    descendants_exited(&replacement).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn short_sessions_reuse_initializing_worker_and_capture_later_call() {
     let mut daemon = IdleDaemon::start(10).await;
     let first = daemon.mcp().await;
     daemon.entered().await;
-    #[cfg(unix)]
-    first.terminate().await;
-    #[cfg(windows)]
-    first.finish().await;
+    first.cancel().await;
     wait_until("initiating MCP disconnect transition", || {
         daemon
             .logs

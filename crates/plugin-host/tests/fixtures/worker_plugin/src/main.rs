@@ -320,9 +320,20 @@ fn wait_for_registration_gate(config: &Json) -> Result<(), String> {
     }
     let pending_marker = directory.join("entered.json.tmp");
     let entered_marker = directory.join("entered.json");
+    let child = if fixture_flag(config, "spawn_child") {
+        let executable = std::env::current_exe()
+            .map_err(|error| format!("cannot locate the fixture executable: {error}"))?;
+        let child = std::process::Command::new(executable)
+            .env("NEMO_RELAY_TEST_FIXTURE_IDLE_CHILD", "1")
+            .spawn()
+            .map_err(|error| format!("cannot spawn the fixture child: {error}"))?;
+        Some(child.id())
+    } else {
+        None
+    };
     std::fs::write(
         &pending_marker,
-        json!({"pid": std::process::id()}).to_string(),
+        json!({"pid": std::process::id(), "child": child}).to_string(),
     )
     .and_then(|()| std::fs::rename(&pending_marker, &entered_marker))
     .map_err(|error| {
@@ -723,6 +734,10 @@ fn mark_json(mut value: Json, key: &str) -> Json {
 
 #[tokio::main]
 async fn main() {
+    if std::env::var_os("NEMO_RELAY_TEST_FIXTURE_IDLE_CHILD").is_some() {
+        std::thread::sleep(std::time::Duration::from_secs(600));
+        return;
+    }
     if let Err(error) = serve_plugin(FixtureWorkerPlugin).await {
         eprintln!("fixture worker failed: {error}");
         std::process::exit(1);
