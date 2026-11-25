@@ -114,6 +114,30 @@ async fn observation_preserves_delivery_while_capturing_json() {
     assert_eq!(observed.value, Some(json!({ "ok": true })));
     assert!(!observed.truncated);
     assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
+    assert_eq!(observed.metadata()["otel.status_code"], "OK");
+}
+
+#[tokio::test]
+async fn non_streaming_observation_records_invalid_json_as_error() {
+    for payload in [b"".as_slice(), br#"{"secret":"do-not-publish""#] {
+        let expected = Bytes::copy_from_slice(payload);
+        let (body, observation) = observe_body(
+            Full::new(expected.clone()),
+            StatusCode::OK,
+            DEFAULT_OBSERVATION_CAPTURE_BYTES,
+            OperationalContext::new(),
+        );
+        assert_eq!(body.collect().await.unwrap().to_bytes(), expected);
+        let observed = observation.finish(ProviderSurface::OpenAIChat, false).await;
+        assert!(observed.value.is_none());
+        assert!(!observed.truncated);
+        assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
+        assert_eq!(observed.metadata()["otel.status_code"], "ERROR");
+        assert_eq!(
+            observed.metadata()["otel.status_description"],
+            "internal error: provider response was not valid JSON",
+        );
+    }
 }
 
 #[tokio::test]
@@ -3363,19 +3387,24 @@ async fn managed_hook_rejects_invalid_and_oversized_json_before_adapter_dispatch
 
 #[tokio::test]
 async fn observation_handles_empty_invalid_and_unsuccessful_provider_responses() {
-    let (body, observation) = observe_body(
-        http_body_util::Empty::<Bytes>::new(),
-        StatusCode::BAD_REQUEST,
-        DEFAULT_OBSERVATION_CAPTURE_BYTES,
-        OperationalContext::new(),
-    );
-    assert!(body.is_end_stream());
-    let observed = observation
-        .finish(ProviderSurface::OpenAIResponses, false)
-        .await;
-    assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
-    assert!(observed.value.is_none());
-    assert!(observed.failure.unwrap().contains("HTTP 400"));
+    for streaming in [false, true] {
+        let (body, observation) = observe_body(
+            http_body_util::Empty::<Bytes>::new(),
+            StatusCode::BAD_REQUEST,
+            DEFAULT_OBSERVATION_CAPTURE_BYTES,
+            OperationalContext::new(),
+        );
+        assert!(body.is_end_stream());
+        let observed = observation
+            .finish(ProviderSurface::OpenAIResponses, streaming)
+            .await;
+        assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
+        assert!(observed.value.is_none());
+        assert_eq!(
+            observed.failure.as_deref(),
+            Some("provider returned HTTP 400")
+        );
+    }
 
     let malformed = Bytes::from_static(b"data: {not-json}\n\n");
     let (body, observation) = observe_body(

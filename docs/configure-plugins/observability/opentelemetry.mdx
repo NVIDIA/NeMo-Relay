@@ -1321,6 +1321,11 @@ nonstandard uncached field: consumers can use the total
 cache-write counts. An omitted cache or uncached count means unavailable, not
 zero.
 
+After delivery completes, fully captured non-streaming daemon responses with a
+successful HTTP status are recorded as errors if their bodies are not valid JSON.
+The status description omits response data, and the daemon forwards the original
+HTTP status and bytes unchanged.
+
 The gateway checks streams with the built-in streaming codec for the OpenAI
 Responses API. Relay treats `response.completed`,
 `response.failed`, and `response.incomplete` as final response events.
