@@ -321,10 +321,71 @@ fn v1_artifact_bytes_do_not_depend_on_binary_or_platform_versioning() {
 }
 
 #[test]
+fn codex_cwd_uses_the_target_dispatcher_directory() {
+    for (platform, dispatcher, directory) in [
+        (
+            ManagedPlatform::Macos,
+            "/opt/nvidia/bin/nemo-relay",
+            "/opt/nvidia/bin",
+        ),
+        (
+            ManagedPlatform::Linux,
+            "/opt/nvidia/bin/nemo-relay",
+            "/opt/nvidia/bin",
+        ),
+        (ManagedPlatform::Linux, "/nemo-relay", "/"),
+        (
+            ManagedPlatform::Linux,
+            "/opt/nvidia:/nemo-relay",
+            "/opt/nvidia:",
+        ),
+        (
+            ManagedPlatform::Windows,
+            "C:/ProgramData/NVIDIA/NeMoRelay/nemo-relay.exe",
+            "C:/ProgramData/NVIDIA/NeMoRelay",
+        ),
+        (
+            ManagedPlatform::Windows,
+            r"C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay.exe",
+            r"C:\ProgramData\NVIDIA\NeMoRelay",
+        ),
+        (ManagedPlatform::Windows, "C:/nemo-relay.exe", "C:/"),
+        (ManagedPlatform::Windows, r"C:\nemo-relay.exe", r"C:\"),
+        (
+            ManagedPlatform::Windows,
+            "//server/share/nemo-relay.exe",
+            "//server/share",
+        ),
+        (
+            ManagedPlatform::Windows,
+            r"\\server\share\nemo-relay.exe",
+            r"\\server\share",
+        ),
+    ] {
+        let spec = ManagedBundleSpec::new(
+            "https://relay.example.com:443",
+            dispatcher,
+            platform,
+            [ManagedAgent::Codex],
+        )
+        .unwrap();
+        let rendered = render_bundle(&spec).unwrap();
+        let mcp = rendered
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.path == "codex/plugin-v1/.mcp.json")
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&mcp.bytes).unwrap();
+        assert_eq!(value["nemo-relay"]["cwd"], directory, "{dispatcher}");
+        assert_eq!(value["nemo-relay"]["command"], dispatcher);
+    }
+}
+
+#[test]
 fn canonical_v1_bundle_matches_the_golden_digest() {
     // This digest pins the v1 manifest and every artifact byte for a canonical deployment,
     // including the supported hook set. Update it only for intentional bundle changes.
-    const GOLDEN_SHA256: &str = "0aaee32d09e5376f8360f141f630b97493c0912e1a91cc7b339a2f9bac0ba589";
+    const GOLDEN_SHA256: &str = "ffec5d0380d24f97bb2f3a6047cfb34ef8e5568c12354e59eff5b351f43ef83c";
     let rendered = render_bundle(&spec([
         ManagedAgent::Codex,
         ManagedAgent::ClaudeCode,
@@ -747,6 +808,9 @@ fn spec_rejects_mutable_or_unsafe_inputs() {
             "C:\\Windows\\Temp\\nemo-relay.exe",
         ),
         (ManagedPlatform::Windows, "/opt/nvidia/nemo-relay"),
+        (ManagedPlatform::Windows, r"\\server\share"),
+        (ManagedPlatform::Windows, "//server/share"),
+        (ManagedPlatform::Windows, r"\\server"),
     ] {
         assert!(
             ManagedBundleSpec::new(

@@ -122,6 +122,13 @@ policy and check its result. For example, use the
 [ATOF exporter](/configure-plugins/observability/atof) with a collector reachable
 by each client. Do not direct all user workers to one shared writable log file.
 
+The managed Codex MCP server runs in the dispatcher command's directory, and
+daemon workers it starts inherit that working directory. Relative file logging
+paths and relative or default ATOF and ATIF output directories resolve there. A
+root-owned install directory is not writable by user workers; configure absolute
+paths to writable, per-user destinations for these file outputs. An unwritable
+required logging sink can prevent startup.
+
 On Unix, create `/etc/nemo-relay` as root with mode 0755 and install the two
 configuration files as root with mode 0644. On Windows, create
 `C:\ProgramData\nemo-relay` as an administrator and allow users read access only.
@@ -659,9 +666,17 @@ Claude launch paths. Refresh does not migrate or overwrite the old bundle.
 Bundles containing only Codex or Pi are unaffected by the Claude change.
 
 The generated Codex bundle captures `SessionEnd` and `Interrupt` and requires
-`codex-cli` 0.150.0 or newer. Older bundles containing Codex no longer match the
-canonical bytes. Generate a replacement in a new directory, redeploy it, and
-provision its new trusted digest separately.
+`codex-cli` 0.150.0 or newer. Its MCP server sets `cwd` to the dispatcher command's
+directory, so Codex can start it after a session's folder is deleted. Codex
+bundles missing these hooks or `cwd` no longer match the canonical bytes.
+Generate a replacement in a new directory, redeploy it, and provision its new
+trusted digest separately. Codex keeps an installed copy of the plugin and does
+not refresh it while the plugin version is unchanged. Replace the marketplace
+copy as described in [Codex](#codex), then, as each user, rerun
+`codex plugin add nemo-relay-managed-v1@nemo-relay-managed` and restart Codex.
+Codex's hook trust covers the plugin's contents, so each user must review and
+trust the replacement Relay hooks again. The installed plugin's `.mcp.json`
+should then contain `cwd`.
 
 The generated Pi extension now forwards the parent tool call ID for nested
 calls. To upgrade a bundle that includes Pi, generate it in a new directory,
@@ -783,8 +798,28 @@ Copy-Item -Recurse -Force 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay-managed-v1
 ```
 
 Run the copy only when creating this marketplace. Keep its files administrator-owned.
-For subsequent deployments, compare the copy with the validated bundle rather than
-merging new files into it. Save the JSON manifest at the path given above.
+For subsequent deployments of the same bundle, compare the copy with the validated
+bundle rather than merging new files into it. Save the JSON manifest at the path
+given above.
+
+When you deploy a replacement bundle, delete the plugin directory and copy it
+again from the replacement bundle. Replace `<replacement-bundle>` with its
+directory. On Unix:
+
+```bash
+sudo rm -rf /opt/nvidia/share/nemo-relay-codex-marketplace-v1/plugins/nemo-relay-managed-v1
+sudo mkdir -p /opt/nvidia/share/nemo-relay-codex-marketplace-v1/plugins/nemo-relay-managed-v1
+sudo cp -R "<replacement-bundle>/codex/plugin-v1/." \
+  /opt/nvidia/share/nemo-relay-codex-marketplace-v1/plugins/nemo-relay-managed-v1/
+```
+
+On Windows, in an elevated PowerShell window:
+
+```powershell
+$RelayMarket = 'C:\ProgramData\NVIDIA\NeMoRelay\codex-marketplace-v1'
+Remove-Item -Recurse -Force "$RelayMarket\plugins\nemo-relay-managed-v1"
+Copy-Item -Recurse '<replacement-bundle>\codex\plugin-v1' "$RelayMarket\plugins\nemo-relay-managed-v1"
+```
 
 As the target user, register and enable the plugin:
 
