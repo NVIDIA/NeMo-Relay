@@ -68,6 +68,14 @@ OpenAI Chat streaming aggregation retains `system_fingerprint` and `service_tier
 and concatenates each choice's text and refusal logprob entries in arrival order.
 These fields remain available through `api_specific` after response decoding.
 
+OpenAI Chat completion validation requires each observed choice to finish before
+the stream ends. A nonempty `finish_reason` or an audio update containing only
+`delta.audio.expires_at` signals completion. Empty `choices` arrays do not
+establish completion, and later metadata does not reset a finished choice. On
+early EOF, managed calls fail while retaining collected output and usage. The
+gateway sends an error instead of `[DONE]`; daemon observation records the
+failure and forwards the original bytes unchanged.
+
 Both gateway aggregation and daemon worker observation apply the streaming
 codec's completion validation. An OpenAI Responses stream that ends without a
 `response.completed`, `response.failed`, or `response.incomplete` event fails

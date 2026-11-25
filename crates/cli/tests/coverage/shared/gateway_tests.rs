@@ -4902,6 +4902,45 @@ async fn streaming_response_delivers_the_first_chunk_once_and_completes() {
 }
 
 #[tokio::test]
+async fn chat_stream_early_eof_emits_an_error_instead_of_done() {
+    use nemo_relay_codecs::openai_chat::OpenAIChatStreamingCodec;
+
+    for complete in [false, true] {
+        let partial = json!({"choices": [{"index": 0,
+            "delta": {"content": "Partial"}, "finish_reason": null}]});
+        let mut chunks = vec![Ok(partial.clone())];
+        if complete {
+            chunks.push(Ok(json!({"choices": [{"index": 0,
+                "delta": {}, "finish_reason": "stop"}]})));
+        }
+        let source = LlmJsonStream::new(futures_util::stream::iter(chunks));
+        let (_manager, guard) = stream_error_test_guard("chat-early-eof").await;
+        let body = prepare_streaming_response_body(
+            OpenAIChatStreamingCodec::new().validate_stream(source),
+            ProviderRoute::OpenAiChatCompletions,
+            guard,
+            None,
+        )
+        .await
+        .unwrap();
+        let bytes = body.collect().await.unwrap().to_bytes();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert!(text.starts_with(&format!("data: {partial}\n\n")));
+        assert_eq!(text.contains("data: [DONE]"), complete);
+        if !complete {
+            let error: Value = serde_json::from_str(
+                text.lines()
+                    .filter_map(|line| line.strip_prefix("data: "))
+                    .next_back()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(error["error"]["code"], "stream_error");
+        }
+    }
+}
+
+#[tokio::test]
 async fn responses_error_event_is_forwarded_before_a_stalled_stream_is_closed() {
     use futures_util::StreamExt;
     use nemo_relay_codecs::openai_responses::OpenAIResponsesStreamingCodec;
