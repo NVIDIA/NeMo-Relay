@@ -53,7 +53,7 @@ Pass this to `LlmStreamCallExecuteParams::borrowed_collector` to avoid copying e
 
 ### `impl StreamingCodec for AnthropicMessagesStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../nemo-relay-codecs/anthropic/struct-anthropicmessagesstreamingcodec\">AnthropicMessagesStreamingCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for AnthropicMessagesStreamingCodec"}} /></pre>
 
 #### `validate_stream`
 
@@ -75,7 +75,7 @@ Reports an error right after the source forwards an Anthropic `error` event.
 
 ### `impl StreamingCodec for GeminiGenerateContentStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../nemo-relay-codecs/gemini_generate_content/struct-geminigeneratecontentstreamingcodec\">GeminiGenerateContentStreamingCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for GeminiGenerateContentStreamingCodec"}} /></pre>
 
 #### `collector`
 
@@ -91,7 +91,7 @@ Reports an error right after the source forwards an Anthropic `error` event.
 
 ### `impl StreamingCodec for OCIGenAIStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../nemo-relay-codecs/oci_genai/struct-ocigenaistreamingcodec\">OCIGenAIStreamingCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for OCIGenAIStreamingCodec"}} /></pre>
 
 #### `collector`
 
@@ -107,7 +107,7 @@ Reports an error right after the source forwards an Anthropic `error` event.
 
 ### `impl StreamingCodec for OpenAIChatStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../nemo-relay-codecs/openai_chat/struct-openaichatstreamingcodec\">OpenAIChatStreamingCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for OpenAIChatStreamingCodec"}} /></pre>
 
 #### `validate_stream`
 
@@ -129,13 +129,13 @@ Forwards a provider error chunk before reporting its error on the next poll.
 
 ### `impl StreamingCodec for OpenAIResponsesStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../nemo-relay-codecs/openai_responses/struct-openairesponsesstreamingcodec\">OpenAIResponsesStreamingCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for OpenAIResponsesStreamingCodec"}} /></pre>
 
 #### `validate_stream`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn validate_stream(&amp;self, stream: <a href=\"middleware/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"middleware/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
 
-Forwards a failed response before reporting its error on the next poll. Reports an error at EOF unless a final response event was seen.
+Forwards a failed response or error event before reporting its error on the next poll. Reports an error at EOF unless a final response event was seen.
 
 The check passes when this stream forwarded a final response event or when this codec's collector recorded one. Middleware between this stream and the collector can drain the source first, so a clean EOF does not mean the collector has finished: the finalizer reflects only the events that reached the collector.
 

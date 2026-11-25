@@ -149,7 +149,8 @@ When breakaway is unavailable and the host permits nested assignment, the
 gateway remains scoped to the host job and the usual 300-second idle reuse
 window can end early. If the host rejects nested assignment, persistent
 bootstrap stops and explains the conflict instead of running without
-process-tree cleanup guarantees.
+process-tree cleanup guarantees. Managed workers launched for MCP hosts
+follow the same rule.
 
 Persistent plugin mode loads system and user Relay configuration only. It does
 not load a project's `.nemo-relay` files. When configuration belongs with a

@@ -60,7 +60,7 @@ Creates a fresh streaming codec with empty accumulator state.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">validate_stream</a>(&amp;self, stream: <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
 
-Forwards a failed response before reporting its error on the next poll. Reports an error at EOF unless a final response event was seen.
+Forwards a failed response or error event before reporting its error on the next poll. Reports an error at EOF unless a final response event was seen.
 
 The check passes when this stream forwarded a final response event or when this codec's collector recorded one. Middleware between this stream and the collector can drain the source first, so a clean EOF does not mean the collector has finished: the finalizer reflects only the events that reached the collector.
 
