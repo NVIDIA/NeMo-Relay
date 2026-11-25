@@ -49,7 +49,7 @@ Creates a fresh streaming codec with empty accumulator state.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">validate_stream</a>(&amp;self, stream: <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
 
-Reports an error right after the source forwards an Anthropic `error` event.
+Reports provider errors and rejects EOF before Anthropic's final `message_stop` event.
 
 #### `collector`
 

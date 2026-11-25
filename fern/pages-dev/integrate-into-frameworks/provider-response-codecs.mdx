@@ -64,9 +64,26 @@ reasons and safety ratings. A blocked prompt with no generated candidates stays
 without candidates; buffered and aggregated responses both normalize its block
 reason to `content_filter` when applicable.
 
+Gemini's owned and borrowed streaming collectors reject top-level JSON `error`
+objects with the provider's status, code, and message when available. Use its
+`validate_stream` hook to also reject empty streams and streams that end before
+the candidate has a `finishReason`. Prompt blocks reported through
+`promptFeedback.blockReason` can finish without a candidate. Token-limit and
+safety finish reasons remain valid completions, and trailing usage or metadata
+does not reset completion. In either failure case, managed streams record
+`ERROR` and retain previously collected output and usage.
+
 OpenAI Chat streaming aggregation retains `system_fingerprint` and `service_tier`
 and concatenates each choice's text and refusal logprob entries in arrival order.
 These fields remain available through `api_specific` after response decoding.
+
+OpenAI Chat completion validation requires each observed choice to finish before
+the stream ends. A nonempty `finish_reason` or an audio update containing only
+`delta.audio.expires_at` signals completion. Empty `choices` arrays do not
+establish completion, and later metadata does not reset a finished choice. On
+early EOF, managed calls fail while retaining collected output and usage. The
+gateway sends an error instead of `[DONE]`; daemon observation records the
+failure and forwards the original bytes unchanged.
 
 Both gateway aggregation and daemon worker observation apply the streaming
 codec's completion validation. An OpenAI Responses stream that ends without a
@@ -75,6 +92,11 @@ validation. A first terminal event of `response.failed` also produces a codec
 error, even though the worker received the terminal snapshot. In both cases the
 worker marks its observation as truncated, omits its aggregate, and forwards the
 original bytes to the application.
+
+Anthropic streams fail completion validation if they end before `message_stop`.
+Managed calls retain previously collected output and usage when reporting this
+failure. Daemon observation marks the capture as truncated and omits its
+aggregate while forwarding the original response bytes.
 
 Observation truncation does not override delivery's terminal outcome. Body read
 failures retain their body-error description. Cancellation retains an unset

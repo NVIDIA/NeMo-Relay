@@ -53,13 +53,13 @@ Pass this to `LlmStreamCallExecuteParams::borrowed_collector` to avoid copying e
 
 ### `impl StreamingCodec for AnthropicMessagesStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for AnthropicMessagesStreamingCodec"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../nemo-relay-codecs/anthropic/struct-anthropicmessagesstreamingcodec\">AnthropicMessagesStreamingCodec</a>"}} /></pre>
 
 #### `validate_stream`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn validate_stream(&amp;self, stream: <a href=\"middleware/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"middleware/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
 
-Reports an error right after the source forwards an Anthropic `error` event.
+Reports provider errors and rejects EOF before Anthropic's final `message_stop` event.
 
 #### `collector`
 
@@ -75,7 +75,11 @@ Reports an error right after the source forwards an Anthropic `error` event.
 
 ### `impl StreamingCodec for GeminiGenerateContentStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for GeminiGenerateContentStreamingCodec"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../nemo-relay-codecs/gemini_generate_content/struct-geminigeneratecontentstreamingcodec\">GeminiGenerateContentStreamingCodec</a>"}} /></pre>
+
+#### `validate_stream`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn validate_stream(&amp;self, stream: <a href=\"middleware/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"middleware/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
 
 #### `collector`
 
@@ -91,7 +95,7 @@ Reports an error right after the source forwards an Anthropic `error` event.
 
 ### `impl StreamingCodec for OCIGenAIStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for OCIGenAIStreamingCodec"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../nemo-relay-codecs/oci_genai/struct-ocigenaistreamingcodec\">OCIGenAIStreamingCodec</a>"}} /></pre>
 
 #### `collector`
 
@@ -107,13 +111,13 @@ Reports an error right after the source forwards an Anthropic `error` event.
 
 ### `impl StreamingCodec for OpenAIChatStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for OpenAIChatStreamingCodec"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../nemo-relay-codecs/openai_chat/struct-openaichatstreamingcodec\">OpenAIChatStreamingCodec</a>"}} /></pre>
 
 #### `validate_stream`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn validate_stream(&amp;self, stream: <a href=\"middleware/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"middleware/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
 
-Forwards a provider error chunk before reporting its error on the next poll.
+Reports provider errors and rejects EOF before every observed choice has finished.
 
 #### `collector`
 
@@ -129,7 +133,7 @@ Forwards a provider error chunk before reporting its error on the next poll.
 
 ### `impl StreamingCodec for OpenAIResponsesStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for OpenAIResponsesStreamingCodec"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../nemo-relay-codecs/openai_responses/struct-openairesponsesstreamingcodec\">OpenAIResponsesStreamingCodec</a>"}} /></pre>
 
 #### `validate_stream`
 

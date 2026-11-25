@@ -16,7 +16,7 @@ pub struct GeminiGenerateContentStreamingCodec { /* private fields */ }
 
 Streaming counterpart to [`GeminiGenerateContentCodec`](/reference/api/rust-library-reference/nemo-relay-codecs/gemini_generate_content/struct-geminigeneratecontentcodec).
 
-Accumulates Gemini server-sent event chunks and assembles a complete response that [`GeminiGenerateContentCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay-codecs/gemini_generate_content/struct-geminigeneratecontentcodec) can consume.
+Accumulates Gemini server-sent event chunks and assembles a complete response that [`GeminiGenerateContentCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay-codecs/gemini_generate_content/struct-geminigeneratecontentcodec) can consume. Use [`StreamingCodec::validate_stream`](/reference/api/rust-library-reference/nemo-relay-types/codec/streaming/trait-streamingcodec) to reject streams that end before a finish reason or a prompt block is received.
 
 ## Implementations
 
@@ -44,6 +44,10 @@ Creates a fresh streaming codec with empty accumulator state.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">StreamingCodec</a> for <a href=\"struct-geminigeneratecontentstreamingcodec\">GeminiGenerateContentStreamingCodec</a>"}} /></pre>
 
+#### `validate_stream`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">validate_stream</a>(&amp;self, stream: <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
+
 #### `collector`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">collector</a>(&amp;self) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/type-llmcollectorfn\">LlmCollectorFn</a>"}} /></pre>
@@ -55,7 +59,3 @@ Creates a fresh streaming codec with empty accumulator state.
 #### `finalizer`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">finalizer</a>(&amp;self) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/type-llmfinalizerfn\">LlmFinalizerFn</a>"}} /></pre>
-
-#### `validate_stream`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">validate_stream</a>(&amp;self, stream: <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
