@@ -76,6 +76,11 @@ error, even though the worker received the terminal snapshot. In both cases the
 worker marks its observation as truncated, omits its aggregate, and forwards the
 original bytes to the application.
 
+Anthropic streams fail completion validation if they end before `message_stop`.
+Managed calls retain previously collected output and usage when reporting this
+failure. Daemon observation marks the capture as truncated and omits its
+aggregate while forwarding the original response bytes.
+
 Observation truncation does not override delivery's terminal outcome. Body read
 failures retain their body-error description. Cancellation retains an unset
 OpenTelemetry status for successful HTTP responses; a received HTTP error is

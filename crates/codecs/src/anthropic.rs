@@ -1306,11 +1306,12 @@ impl Default for AnthropicMessagesStreamingCodec {
 }
 
 impl nemo_relay_types::codec::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
-    /// Reports an error right after the source forwards an Anthropic `error` event.
+    /// Reports provider errors and rejects EOF before Anthropic's final `message_stop` event.
     fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
         LlmJsonStream::from_closeable(AnthropicCompletionStream {
             inner: stream,
             error: None,
+            message_stop_forwarded: false,
             ended: false,
         })
     }
@@ -1350,7 +1351,7 @@ impl nemo_relay_types::codec::streaming::StreamingCodec for AnthropicMessagesStr
     }
 }
 
-/// Forwards Anthropic events unchanged and reports an in-stream `error` event right after it.
+/// Forwards Anthropic events unchanged and checks for provider errors and incomplete messages.
 ///
 /// The check reads forwarded events directly rather than collector state, so it does not depend
 /// on when the paired collector observes each event.
@@ -1358,13 +1359,14 @@ struct AnthropicCompletionStream {
     inner: LlmJsonStream,
     /// Description of the first forwarded `error` event.
     error: Option<String>,
+    message_stop_forwarded: bool,
     ended: bool,
 }
 
 impl Stream for AnthropicCompletionStream {
     type Item = Result<Json>;
 
-    /// Forwards events and emits at most one error after an Anthropic `error` event.
+    /// Forwards events and emits at most one error for a failed or incomplete message.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         if this.ended {
@@ -1384,11 +1386,25 @@ impl Stream for AnthropicCompletionStream {
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
                 this.error = anthropic_stream_error(&event);
+                this.message_stop_forwarded |=
+                    event.get("type").and_then(Json::as_str) == Some("message_stop");
                 Poll::Ready(Some(Ok(event)))
             }
             Poll::Ready(None) => {
                 this.ended = true;
-                Poll::Ready(None)
+                if this.message_stop_forwarded {
+                    Poll::Ready(None)
+                } else {
+                    log::warn!(
+                        target: "nemo_relay.runtime",
+                        event = "llm_stream_incomplete",
+                        reason = "missing_message_stop";
+                        "Anthropic stream ended before its message_stop event"
+                    );
+                    Poll::Ready(Some(Err(FlowError::Internal(
+                        "Anthropic stream ended before its message_stop event".into(),
+                    ))))
+                }
             }
             Poll::Ready(Some(Err(error))) => {
                 this.ended = true;

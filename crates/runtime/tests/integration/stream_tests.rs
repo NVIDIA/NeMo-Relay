@@ -3038,20 +3038,32 @@ async fn close_keeps_the_stream_error_variant_when_cleanup_also_fails() {
     assert!(stream.next().await.is_none());
 }
 
-/// The Anthropic completion check forwards events and reports an in-stream `error` event.
+/// Completion validation runs independently of collection and preserves producer cleanup.
 #[tokio::test]
-async fn anthropic_stream_validation_reports_error_events_and_preserves_close() {
+async fn anthropic_stream_validation_requires_message_stop_and_preserves_close() {
     let start = json!({"type": "message_start", "message": {
         "id": "msg_1", "type": "message", "role": "assistant", "content": [],
         "usage": {"input_tokens": 1, "output_tokens": 1}}});
     let delta = json!({"type": "content_block_delta", "index": 0,
         "delta": {"type": "text_delta", "text": "Partial"}});
     let stop = json!({"type": "message_stop"});
+    let final_delta = json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}});
     let unknown = json!({"type": "future_event"});
     let error = json!({"type": "error",
         "error": {"type": "overloaded_error", "message": "Overloaded"}});
     for (chunks, expected_error) in [
-        (vec![], None),
+        (
+            vec![],
+            Some("Anthropic stream ended before its message_stop event"),
+        ),
+        (
+            vec![start.clone(), delta.clone()],
+            Some("Anthropic stream ended before its message_stop event"),
+        ),
+        (
+            vec![start.clone(), final_delta],
+            Some("Anthropic stream ended before its message_stop event"),
+        ),
         (vec![start.clone(), delta.clone(), stop.clone()], None),
         (vec![start.clone(), unknown.clone(), stop.clone()], None),
         (
@@ -3116,9 +3128,9 @@ async fn anthropic_stream_validation_reports_error_events_and_preserves_close() 
     assert_eq!(close_calls.load(Ordering::SeqCst), 1);
 }
 
-/// An Anthropic stream that ends with an `error` event is recorded as an error.
+/// Provider errors and premature EOF fail the call while retaining collected output.
 #[tokio::test]
-async fn anthropic_sessions_record_in_stream_error_events_as_errors() {
+async fn anthropic_sessions_record_stream_failures_and_preserve_partial_output() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
@@ -3136,7 +3148,18 @@ async fn anthropic_sessions_record_in_stream_error_events_as_errors() {
     )
     .unwrap();
 
-    for (call, failed) in [(0_u64, false), (1_u64, true)] {
+    let cases = [
+        ("complete", None),
+        (
+            "provider_error",
+            Some("Anthropic stream reported overloaded_error: Overloaded"),
+        ),
+        (
+            "early_eof",
+            Some("Anthropic stream ended before its message_stop event"),
+        ),
+    ];
+    for (call, (scenario, expected_error)) in cases.iter().copied().enumerate() {
         let codec = AnthropicMessagesStreamingCodec::new();
         let mut chunks = vec![
             json!({"type": "message_start", "message": {
@@ -3148,10 +3171,10 @@ async fn anthropic_sessions_record_in_stream_error_events_as_errors() {
             json!({"type": "content_block_delta", "index": 0,
                 "delta": {"type": "text_delta", "text": "Partial"}}),
         ];
-        if failed {
+        if scenario == "provider_error" {
             chunks.push(json!({"type": "error",
                 "error": {"type": "overloaded_error", "message": "Overloaded"}}));
-        } else {
+        } else if scenario == "complete" {
             chunks.push(json!({"type": "content_block_stop", "index": 0}));
             chunks.push(json!({"type": "message_delta",
                 "delta": {"stop_reason": "end_turn", "stop_sequence": null},
@@ -3184,8 +3207,11 @@ async fn anthropic_sessions_record_in_stream_error_events_as_errors() {
         for expected in expected_chunks {
             assert_eq!(wrapper.next().await.unwrap().unwrap(), expected);
         }
-        if failed {
-            assert!(wrapper.next().await.unwrap().is_err());
+        if let Some(description) = expected_error {
+            assert_eq!(
+                wrapper.next().await.unwrap().unwrap_err().to_string(),
+                FlowError::Internal(description.into()).to_string()
+            );
         }
         assert!(wrapper.next().await.is_none());
     }
@@ -3196,28 +3222,31 @@ async fn anthropic_sessions_record_in_stream_error_events_as_errors() {
         .iter()
         .filter(|event| is_llm_end(event) && event.parent_uuid() == Some(session.uuid))
         .collect();
-    assert_eq!(ends.len(), 2);
+    assert_eq!(ends.len(), cases.len());
     ends.sort_by_key(|event| event.metadata().unwrap()["call_index"].as_u64().unwrap());
-    for (call, end) in ends.iter().enumerate() {
-        let failed = call == 1;
+    for (end, (_, expected_error)) in ends.iter().zip(cases) {
         let metadata = end.metadata().unwrap();
         assert_eq!(
             metadata["otel.status_code"],
-            if failed { "ERROR" } else { "OK" }
+            if expected_error.is_some() {
+                "ERROR"
+            } else {
+                "OK"
+            }
         );
-        if failed {
+        if let Some(description) = expected_error {
             assert_eq!(
                 metadata["otel.status_description"],
-                FlowError::Internal(
-                    "Anthropic stream reported overloaded_error: Overloaded".into()
-                )
-                .to_string()
+                FlowError::Internal(description.into()).to_string()
             );
         }
         let response = end.annotated_response().unwrap();
-        assert!(
-            response.message.is_some(),
-            "keep output received before the error event"
+        assert_eq!(response.response_text().as_deref(), Some("Partial"));
+        let usage = response.usage.as_ref().unwrap();
+        assert_eq!(usage.prompt_tokens, Some(10));
+        assert_eq!(
+            usage.completion_tokens,
+            Some(if expected_error.is_some() { 1 } else { 5 })
         );
     }
     deregister_subscriber("anthropic_stream_error_status").unwrap();
