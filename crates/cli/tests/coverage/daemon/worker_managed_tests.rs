@@ -380,6 +380,54 @@ async fn stream_observation_validates_responses_completion_without_changing_deli
 }
 
 #[tokio::test]
+async fn stream_observation_rejects_incomplete_anthropic_messages_without_changing_delivery() {
+    for complete in [false, true] {
+        let mut events = vec![
+            json!({"type": "message_start", "message": {
+                "id": "msg_test", "type": "message", "role": "assistant", "content": []
+            }}),
+            json!({"type": "content_block_start", "index": 0,
+                "content_block": {"type": "text", "text": "Partial"}}),
+        ];
+        if complete {
+            events.extend([
+                json!({"type": "content_block_stop", "index": 0}),
+                json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+                json!({"type": "message_stop"}),
+            ]);
+        }
+        let wire: String = events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect();
+        let expected = Bytes::from(wire);
+        let (body, observation) = observe_body(
+            Full::new(expected.clone()),
+            StatusCode::OK,
+            DEFAULT_OBSERVATION_CAPTURE_BYTES,
+            OperationalContext::new(),
+        );
+        assert_eq!(body.collect().await.unwrap().to_bytes(), expected);
+        let observed = observation
+            .finish(ProviderSurface::AnthropicMessages, true)
+            .await;
+        assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
+        assert_eq!(observed.truncated, !complete);
+        assert_eq!(observed.value.is_some(), complete);
+        assert_eq!(
+            observed.metadata()["otel.status_code"],
+            if complete { "OK" } else { "ERROR" }
+        );
+        if !complete {
+            assert_eq!(
+                observed.metadata()["otel.status_description"],
+                "internal error: Anthropic stream ended before its message_stop event"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn stream_observation_preserves_provider_failure_details() {
     for (surface, event, description) in [
         (
