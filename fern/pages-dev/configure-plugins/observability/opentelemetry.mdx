@@ -1345,6 +1345,11 @@ For Chat Completions streams, the gateway forwards chunks with a top-level
 records an error with the provider's code or type and message when supplied.
 The gateway also sends its standard error event instead of `[DONE]`.
 
+For fully captured daemon worker streams, validation failures appear in the span's
+status description when response delivery completes. Invalid aggregates are omitted.
+Malformed SSE and collection failures use generic descriptions that omit response
+payloads. Response bytes continue to be forwarded unchanged.
+
 For managed streaming LLM calls, the end span also includes
 `gen_ai.response.time_to_first_chunk` in seconds. Relay measures from the
 start of managed stream execution until the first provider protocol chunk is
