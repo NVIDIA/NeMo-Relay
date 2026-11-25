@@ -1,0 +1,99 @@
+---
+title: "nemo_relay.integrations.google_adk.plugin"
+sidebar-title: "plugin"
+description: "Provide the Google ADK plugin that records invocations and agent runs as scopes."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/integrations/google_adk/plugin.py`.
+
+Module `nemo_relay.integrations.google_adk.plugin`.
+
+Provide the Google ADK plugin that records invocations and agent runs as scopes.
+
+## Classes
+
+### `NemoRelayPlugin(BasePlugin)`
+
+Record ADK invocations and agent runs as scopes, and run the model and tool calls that ADK makes through Relay.
+
+#### Methods
+
+##### `NemoRelayPlugin`
+
+```python
+def NemoRelayPlugin(name: str = 'nemo_relay') -> None
+```
+
+Create an instance.
+
+##### `before_run_callback`
+
+```python
+async def before_run_callback(*, invocation_context: InvocationContext) -> types.Content | None
+```
+
+##### `after_run_callback`
+
+```python
+async def after_run_callback(*, invocation_context: InvocationContext) -> None
+```
+
+End the invocation as ADK reports it, as cancelled for an aborted run and otherwise as completed.
+
+##### `on_run_error_callback`
+
+```python
+async def on_run_error_callback(*, invocation_context: InvocationContext, error: Exception) -> None
+```
+
+##### `close`
+
+```python
+async def close() -> None
+```
+
+Close the scope of each invocation that is still running as cancelled.
+
+##### `before_agent_callback`
+
+```python
+async def before_agent_callback(*, agent: BaseAgent, callback_context: CallbackContext) -> types.Content | None
+```
+
+##### `after_agent_callback`
+
+```python
+async def after_agent_callback(*, agent: BaseAgent, callback_context: CallbackContext) -> types.Content | None
+```
+
+Close the agent run, as cancelled when ADK calls this hook while the agent's task is being cancelled.
+
+##### `on_agent_error_callback`
+
+```python
+async def on_agent_error_callback(*, agent: BaseAgent, callback_context: CallbackContext, error: Exception) -> None
+```
+
+##### `before_model_callback`
+
+```python
+async def before_model_callback(*, callback_context: CallbackContext, llm_request: LlmRequest) -> LlmResponse | None
+```
+
+##### `before_tool_callback`
+
+```python
+async def before_tool_callback(*, tool: BaseTool, tool_args: dict[str, Any], tool_context: ToolContext) -> dict[str, Any] | None
+```
+
+##### `on_event_callback`
+
+```python
+async def on_event_callback(*, invocation_context: InvocationContext, event: Event) -> Event | None
+```
+
+Record final responses and the provider-run tools that each event reports.
+

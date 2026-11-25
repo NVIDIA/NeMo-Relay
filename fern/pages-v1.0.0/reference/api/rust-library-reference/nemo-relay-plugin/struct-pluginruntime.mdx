@@ -1,0 +1,200 @@
+---
+title: "Struct Plugin Runtime"
+sidebar-title: "PluginRuntime"
+description: "API documentation for the Rust `PluginRuntime` struct in crate `nemo_relay_plugin`."
+position: 48
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct PluginRuntime { /* private fields */ }
+```
+
+## Implementations
+
+### `impl PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `diagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn diagnostics(&amp;self) -&gt; <a href=\"diagnostics/struct-diagnostics\">Diagnostics</a>"}} /></pre>
+
+#### `current_scope_stack_snapshot`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn current_scope_stack_snapshot(&amp;self) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-scopestacksnapshot\">ScopeStackSnapshot</a>&gt;&gt;"}} /></pre>
+
+#### `list_runtime_registrations`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn list_runtime_registrations(\n    &amp;self,\n    kinds: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/set/struct.BTreeSet.html\">BTreeSet</a>&lt;<a href=\"enum-runtimeregistrationkind\">RuntimeRegistrationKind</a>&gt;&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-runtimeregistrationidentity\">RuntimeRegistrationIdentity</a>&gt;&gt;"}} /></pre>
+
+#### `scope_stack_active`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_stack_active(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `current_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn current_scope(&amp;self) -&gt; Result&lt;<a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Get the current scope handle or fail if the host reports no current scope.
+
+#### `push_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push_scope(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;&gt;"}} /></pre>
+
+#### `push_scope_with_options`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push_scope_with_options(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    options: <a href=\"struct-scopeoptions\">ScopeOptions</a>&lt;'_&gt;,\n) -&gt; Result&lt;<a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Push a scope with an explicit parent, behavior flags, or start time.
+
+#### `pop_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn pop_scope(\n    &amp;self,\n    handle: &amp;<a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;,\n    output: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+#### `scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"struct-scopeguard\">ScopeGuard</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Push a scope and return a guard that closes it when dropped.
+
+#### `scope_with_options`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_with_options(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    options: <a href=\"struct-scopeoptions\">ScopeOptions</a>&lt;'_&gt;,\n) -&gt; Result&lt;<a href=\"struct-scopeguard\">ScopeGuard</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Open a scope guard with an explicit parent, behavior flags, or start time.
+
+#### `scope_at`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_at(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    started_at: <a href=\"https://doc.rust-lang.org/1.96.1/std/time/struct.SystemTime.html\">SystemTime</a>,\n) -&gt; Result&lt;<a href=\"struct-scopeguard\">ScopeGuard</a>&lt;'_&gt;&gt;"}} /></pre>
+
+#### `emit_mark`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn emit_mark(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+#### `emit_mark_with_options`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn emit_mark_with_options(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    data_schema: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-dataschema\">DataSchema</a>&gt;,\n    severity: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-logseverity\">LogSeverity</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+#### `emit_mark_with_context`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn emit_mark_with_context(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    options: <a href=\"struct-emitmarkoptions\">EmitMarkOptions</a>&lt;'_&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Emit a mark with an explicit parent, timestamp, schema, or severity.
+
+#### `emit_metric`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn emit_metric(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    measurements: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-metricmeasurement\">MetricMeasurement</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Validate metric measurements and emit them using Relay's reserved metric schema.
+
+#### `runtime_diagnostics`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn runtime_diagnostics(&amp;self) -&gt; Result&lt;<a href=\"struct-runtimediagnostics\">RuntimeDiagnostics</a>&gt;"}} /></pre>
+
+#### `estimate_cost_for_provider`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn estimate_cost_for_provider(\n    &amp;self,\n    provider: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n    model: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    usage: &amp;<a href=\"struct-usage\">Usage</a>,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-costestimate\">CostEstimate</a>&gt;&gt;"}} /></pre>
+
+Estimate cost with the host's active model pricing catalog.
+
+Returns `Ok(None)` when the catalog has no pricing for the model. Hosts older than this operation return an error, which callers should treat as an unknown cost.
+
+#### `response_cost_for_provider`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn response_cost_for_provider(\n    &amp;self,\n    response: &amp;<a href=\"struct-annotatedllmresponse\">AnnotatedLlmResponse</a>,\n    provider: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-costestimate\">CostEstimate</a>&gt;&gt;"}} /></pre>
+
+Price a normalized response with the host's full pricing rules.
+
+Returns the response's reported cost when present; otherwise the host's estimate for its model and usage, or `Ok(None)` when unknown. Hosts older than this operation return an error, which callers should treat as an unknown cost.
+
+#### `log`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn log(\n    &amp;self,\n    level: <a href=\"enum-pluginloglevel\">PluginLogLevel</a>,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Send a process log record with optional structured fields through the host runtime capability.
+
+#### `create_scope_stack`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn create_scope_stack(&amp;self) -&gt; Result&lt;<a href=\"struct-scopestack\">ScopeStack</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Create an isolated host-owned scope stack whose handle releases it when dropped.
+
+#### `capture_scope_stack_thread`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn capture_scope_stack_thread(&amp;self) -&gt; Result&lt;<a href=\"struct-scopestackbinding\">ScopeStackBinding</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Capture this thread's scope binding so it can be restored later.
+
+#### `bind_scope_stack_thread`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn bind_scope_stack_thread&lt;'a&gt;(\n    &amp;'a self,\n    stack: &amp;'a <a href=\"struct-scopestack\">ScopeStack</a>&lt;'a&gt;,\n) -&gt; Result&lt;<a href=\"struct-threadscopestackguard\">ThreadScopeStackGuard</a>&lt;'a&gt;&gt;"}} /></pre>
+
+Install an isolated stack until the returned guard restores the previous thread binding.
+
+#### `register_conditional_middleware_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_conditional_middleware_guardrail&lt;F&gt;(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    kinds: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/set/struct.BTreeSet.html\">BTreeSet</a>&lt;<a href=\"enum-runtimeregistrationkind\">RuntimeRegistrationKind</a>&gt;,\n    registration_name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    callback: F,\n) -&gt; Result&lt;<a href=\"struct-conditionalmiddlewareguardrailhandle\">ConditionalMiddlewareGuardrailHandle</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/set/struct.BTreeSet.html\">BTreeSet</a>&lt;<a href=\"enum-runtimeregistrationkind\">RuntimeRegistrationKind</a>&gt;, &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Register a revocable synchronous gate scoped to this component's lifetime.
+
+#### `deregister_conditional_middleware_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister_conditional_middleware_guardrail(\n    &amp;self,\n    handle: &amp;<a href=\"struct-conditionalmiddlewareguardrailhandle\">ConditionalMiddlewareGuardrailHandle</a>,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+
+### `impl PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `trace`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn trace(\n    &amp;self,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+### `impl PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `debug`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn debug(\n    &amp;self,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+### `impl PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `info`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn info(\n    &amp;self,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+### `impl PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `warn`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn warn(\n    &amp;self,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+### `impl PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn error(\n    &amp;self,\n    target: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    message: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+## Trait Implementations
+
+### `impl Clone for PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

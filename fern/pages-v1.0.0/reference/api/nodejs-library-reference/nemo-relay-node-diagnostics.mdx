@@ -1,0 +1,113 @@
+---
+title: "nemo-relay-node/diagnostics"
+description: "Declarations exported by `nemo-relay-node/diagnostics`."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `crates/node/dist/diagnostics.d.ts`.
+
+Import from `nemo-relay-node/diagnostics`.
+
+Declarations exported by `nemo-relay-node/diagnostics`.
+
+## Classes
+
+### `DiagnosticsError`
+
+Reader failure with a stable `reason` and no evidence in the message.
+
+```ts
+export declare class DiagnosticsError extends Error {
+    readonly reason: DiagnosticsReason;
+    constructor(reason: DiagnosticsReason);
+}
+```
+
+### `DiagnosticsReader`
+
+Reads diagnostics for this process; keep it from untrusted clients.
+
+```ts
+export declare class DiagnosticsReader {
+    #private;
+    constructor(native: NativeDiagnosticsReader);
+    /** Returns one page as objects with `bigint` diagnostic integers. */
+    snapshot(query?: DiagnosticQuery): DiagnosticSnapshot;
+    /** Returns one page as canonical JSON with integers as decimal strings. */
+    snapshotJson(query?: DiagnosticQuery): string;
+    /** Returns one memory page as objects with `bigint` diagnostic integers. */
+    inspectMemory(query?: DiagnosticQuery): DiagnosticMemoryPage;
+    /** Returns one memory page as canonical JSON with integers as decimal strings. */
+    inspectMemoryJson(query?: DiagnosticQuery): string;
+    /** Returns budgets, occupancy, and logging coverage. */
+    info(): DiagnosticsInfo;
+}
+```
+
+## Functions
+
+### `reader`
+
+Returns a reader, or throws `not_initialized`.
+
+```ts
+export declare function reader(): DiagnosticsReader;
+```
+
+## Type Aliases
+
+### `DiagnosticsReason`
+
+```ts
+export type DiagnosticsReason = (typeof reasonNames)[number] | 'unavailable';
+```
+
+## Re-exports
+
+- `Classification`
+- `ComponentIdentity`
+- `ComponentMemoryFootprint`
+- `ComponentMemoryUsage`
+- `ComponentOwnership`
+- `ComponentSnapshot`
+- `DiagnosticCapability`
+- `DiagnosticCorrelation`
+- `DiagnosticCount`
+- `DiagnosticCounter`
+- `DiagnosticCoverage`
+- `DiagnosticCursor`
+- `DiagnosticDetail`
+- `DiagnosticDiscovery`
+- `DiagnosticEvent`
+- `DiagnosticLifetimeSummary`
+- `DiagnosticLoss`
+- `DiagnosticMemoryPage`
+- `DiagnosticMemoryUsage`
+- `DiagnosticNumber`
+- `DiagnosticOrigin`
+- `DiagnosticQuery`
+- `DiagnosticRefreshSummary`
+- `DiagnosticRetention`
+- `DiagnosticSnapshot`
+- `DiagnosticTotals`
+- `DiagnosticWindow`
+- `DiagnosticWindowBucket`
+- `DiagnosticWindowCoverage`
+- `DiagnosticsInfo`
+- `EntryMemoryFootprint`
+- `EntryMemoryUsage`
+- `MemoryLimitEvent`
+- `MemorySelectionTotals`
+- `PluginObservationContext`
+- `RemoteDiagnosticOrigin`
+- `ResourceMemoryMeasurement`
+- `ResourceMemoryMetrics`
+- `ResourceMemoryNumber`
+- `ResourceMemorySample`
+- `ResourceMemoryUnit`
+- `ResourceMemoryView`
+- `ResourceProcessIdentity`
+- `SourceIdentity`
+

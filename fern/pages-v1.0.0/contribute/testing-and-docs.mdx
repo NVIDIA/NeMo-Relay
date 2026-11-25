@@ -1,0 +1,367 @@
+---
+title: "Testing and Documentation"
+description: "Choose and run validation for NeMo Relay code, quick starts, documentation, and generated references."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page describes the validation and documentation checks expected for repository
+changes.
+
+Rust and Python examples, plugin test fixtures, and benchmark tools are workspace
+members. Dependency versions are locked in the repository-root `Cargo.lock` and
+`uv.lock`; npm workspaces use the root `package-lock.json`. Run Python example
+commands with `uv run --package <example-package>` to select the example while
+sharing the root environment.
+
+## Quick Start Contracts
+
+The quick starts store commands and expected output in their MDX pages. Sample
+files are committed beside the pages and displayed with Fern's `Code` component.
+The checker reads the referenced files, so displayed and tested content share
+the same source. From the repository root, validate contracts and run the checker
+unit tests. Install `jq` first; a missing executable fails these checks:
+
+```bash
+just check-quickstarts
+```
+
+The existing CI `Check / Run` job runs this command without inference
+credentials. Every guide in `docs/getting-started/quick-start/`, except
+`index.mdx`, must have a contract. Missing contracts and an empty guide
+directory fail validation.
+
+These lightweight checks run whenever the CI `Check / Run` job runs. Changes to
+shared dependencies or CI tooling can affect validation without changing a guide.
+Full Quick Start execution remains a separate manually triggered workflow.
+
+The target explicitly selects the contract-checker and jq fixture tests. It does
+not discover execution tests or run shell/Python code extracted from the guides.
+Document execution and its regression tests belong to the separate manual
+Quick Start execution workflow.
+
+The committed `scripts/quickstarts/schema.json` defines scenario and block
+metadata, including field types, required fields, and permitted values. Unknown
+fields fail validation. The `schema: 1` field versions this testing format,
+not the Relay release; ordinary Relay version bumps do not change it.
+The Python checker additionally validates relationships such as referenced
+files, command IDs, shell variants, and lifecycle assertions.
+It reports schema errors together and continues checking other guides after a
+page fails. Invalid metadata can prevent further checks within that page.
+
+The JSON metadata is embedded in each guide; commands, expected output, and
+referenced samples come from the displayed documentation. Review assertions in
+the same PR as a guide change. Static validation catches broken structure and
+references, but cannot establish that assertions fully describe the prose.
+Execution tests compare actual results with those assertions; consistency with
+the guide's intent still requires review.
+
+After installing the dev dependencies with the command above, use
+`uv run --no-sync python scripts/check-quickstarts.py extract <page> --shell bash` to inspect
+its commands. Replace `<page>` with the guide's MDX path.
+
+The `preflight` mode rejects stale artifacts. The `verify` mode checks expected
+output and artifacts after a successful run. These modes do not execute commands,
+provision credentials, or test operating-system compatibility.
+
+Review documentation in the same PR as a version bump, including early
+development bumps. Ask a coding agent to review affected installation
+instructions and examples, then have a maintainer review its proposed changes.
+Choose documentation versions according to the intended audience and available
+packages; contract checks do not require them to match the Cargo workspace
+version. The documentation maintenance process is described in
+[`RELEASING.md`](../../RELEASING.md#documentation-maintenance).
+
+The unit tests also exercise the four agent-runtime guides'
+copyable JSON verification expressions against complete and invalid fixtures.
+They use the installed `jq` executable.
+
+These are document, checker, and JSON-expression tests, not quickstart execution tests.
+A passing check does not establish that packages have been published, that a
+provider accepts the example, or that the guide runs on every supported system.
+Live execution and cross-platform quickstart validation remain separate work.
+
+## Execute Quick Starts
+
+Use `just test-quickstarts` locally or the manually triggered **Execute Quick
+Starts** GitHub Actions workflow. Install the dev dependencies described above,
+plus `just`, `uv`, Node.js, and Rust. Release and build downloads also need `gh`
+with read access. Local Codex and Claude Code cases require those hosts installed;
+CI provisions pinned versions. Windows requires Git for Windows and PowerShell 7.4+.
+
+```bash
+just test-quickstarts --list
+just test-quickstarts --version 0.11.0 --cases local
+
+# Build development assets and use guides from the same immutable commit.
+git fetch upstream main
+just test-quickstarts --source-ref upstream/main --cases all
+
+# Test candidate assets at an explicit location.
+just test-quickstarts --version 0.11.0-rc.2 --asset-location /path/to/r2-assets
+```
+
+`all` selects every discovered guide; `local` selects Python, Node.js, Rust, and
+LangGraph. Use comma-separated IDs for a focused run, such as
+`--cases langchain,deep-agents`. A new Quick Start needs an unattended adapter:
+`all` fails before execution if any discovered guide lacks one. Select supported
+cases explicitly to run a subset.
+
+Choose one asset source:
+
+| Input | Behavior |
+| --- | --- |
+| `--version VERSION` | Resolve that exact GitHub release; use guides from the current checkout. |
+| `--version VERSION --asset-location LOCATION` | Read a local directory, GitHub release URL, or HTTPS directory with `SHA256SUMS`. |
+| `--version VERSION --run-id ID` | Download assets from a completed Actions build. `--repository OWNER/REPO` selects its repository. |
+| `--source-ref REF` | Pin a local Git ref, build host assets through the harness's `just` recipes with a development profile, and use guides from that source commit. |
+
+Source mode excludes uncommitted changes and cannot be combined with external
+assets or overrides. To reuse a source build, pass its `packages` directory as
+`--asset-location`; the current checkout then supplies the guides. Remote assets
+require matching SHA-256 checksums, and package metadata must match the requested
+version. Rust uses crates.io unless crate assets or a source override are supplied.
+See `just test-quickstarts --help` for `--overrides`, `--hermes-ref`, and other options.
+
+In GitHub Actions, select the execution branch and provide either `version` or
+`source_ref` (for example, `origin/main`), plus optional asset and case inputs.
+The workflow must first exist on the default branch for GitHub to expose its
+normal manual trigger. It runs Linux x86-64 and Apple Silicon macOS with Bash,
+and Windows x86-64 with native PowerShell. No self-hosted runner or inference
+credentials are required.
+
+Each case uses a fresh temporary workspace. The runner substitutes the selected
+Relay installation assets, executes the documented programs and verification
+expressions, and checks exit codes, tool effects, and contracted ATOF lifecycle
+events. Agent cases use a loopback provider with deterministic responses; real
+agents execute tools, and Relay produces the events. GitHub credentials remain
+available for downloads and are excluded from build and case subprocesses.
+
+The command exits nonzero if any selected case fails. Evidence is saved under
+`artifacts/quickstarts/` (or a new `--output` directory): `results.json` identifies
+failed cases and blocks, `resolved-assets.json` identifies packages and hashes,
+and `build.json` records source-build provenance. Logs, lockfiles, and event files
+support diagnosis. CI uploads this evidence and publishes a result summary.
+
+Passing validates those execution paths with the selected assets and host
+versions. It does not validate live-provider authentication, model quality, every
+consumer environment, or the versions and explanations displayed in the prose.
+Use a clean host: system-managed Relay and agent configuration still applies.
+Hermes is installed from an immutable commit, then its Relay dependency is
+overridden with the selected wheel; this compatibility override is recorded.
+Windows ARM64 is outside the CI matrix. Execution is manual, not an automatic
+gate on every update.
+
+The manual workflow also runs helper and document-execution regressions. Run the
+same group locally after installing the dev dependencies:
+
+```bash
+uv run --no-sync python -m unittest \
+  scripts.tests.test_quickstart_execution \
+  scripts.tests.test_quickstart_programs \
+  scripts.tests.test_quickstart_reruns
+```
+
+## Testing Rule
+
+Run tests for every language surface whose observable behavior can change. Start
+with the smallest focused test that proves the change, then run the canonical
+suite for each directly affected surface before handoff. A Rust implementation
+change does not automatically require every binding suite. Add a binding suite
+when the shared change affects that binding's public or observable contract.
+
+Run the affected targets directly:
+
+```bash
+just test-rust
+
+# Rust tests with coverage. Needs `cargo install cargo-llvm-cov` and `rustup component add llvm-tools`.
+just ci=true test-rust
+
+just test-python
+just test-go
+just test-node
+just test-openclaw
+```
+
+The Rust-backed test recipes use `cargo-nextest`; install it with
+`cargo install cargo-nextest --version 0.9.133 --locked` before running them.
+
+The Rust, Python, and Go recipes build the native and worker dynamic-plugin test
+fixtures once before starting their test runners. Before a focused raw test that
+uses those fixtures, prepare them explicitly:
+
+```bash
+just build-test-plugin-fixtures
+```
+
+Keep normal hermetic test cases below five seconds. Do not compile packages or
+fixtures inside a test case, keep real-time synchronization guards at five
+seconds or less, and use virtual time when validating timer behavior. Package
+builds and opt-in live end-to-end checks remain separate validation steps with
+their own runtime budgets.
+
+Run integration, documentation, packaging, FFI, generated-output, or build-only
+checks only when those surfaces change or the relevant test does not build
+them. Documentation, comments, mechanical metadata, and other reversible
+low-impact changes do not require language suites or tests that merely mirror
+the implementation. CI remains the broader cross-platform backstop.
+
+Use the matching build recipes when you need explicit build-only passes:
+
+```bash
+just build-rust
+just build-python
+just build-go
+just build-node
+```
+
+## Common Commands
+
+These commands cover the most common language-specific validation loops.
+
+### Rust
+
+Run the Rust validation loop when a change touches the core runtime or
+Rust-facing API surface.
+
+```bash
+just test-rust
+```
+
+SDK tests that initialize plugins require the test-only isolation feature and
+environment flag. The canonical recipe supplies both. For a focused run:
+
+```bash
+NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1 cargo test -p nemo-relay \
+  --features __skip-implicit-config --test plugin_cold_start --test plugin_contract
+```
+
+These targets are unavailable without the feature and reject a missing environment
+flag before resolving configuration. Explicit fixture files remain available;
+ambient user and operator-managed plugin configuration is excluded.
+
+### Python
+
+Run the Python validation loop when a change touches the wrapper package, tests,
+or docs tooling.
+
+```bash
+uv sync
+just build-test-plugin-fixtures
+uv run pytest
+```
+
+### Node.js
+
+Run the Node.js validation loop when a change touches the NAPI binding or
+JavaScript package surface. Run the OpenClaw target when Node changes can affect
+the OpenClaw plugin or when touching `integrations/openclaw`.
+
+```bash
+npm install --ignore-scripts
+npm test --workspace=nemo-relay-node
+just test-openclaw
+```
+
+## Documentation Checklist
+
+If your change affects public behavior, bindings, examples, or workspace structure, update the corresponding docs in the same branch.
+
+Before opening a PR, confirm:
+
+1. `README.md` still matches the repo structure
+2. Relevant reference docs are updated for public API changes.
+3. Relevant package or crate READMEs are updated when needed.
+4. Examples and snippets stay aligned with supported bindings.
+5. Docs build cleanly.
+
+## Docs Verification
+
+Use `just docs` to validate the Fern documentation site after relevant docs
+changes. It regenerates the ignored Python, Node.js, and Rust API reference
+pages before checking links and navigation. It also compiles and runs the Rust
+examples that share source files with the guides. `just docs-linkcheck` is the
+compatibility entry point for a link-focused run; the recipes currently perform
+the same validation, so do not run both.
+
+```bash
+just docs
+```
+
+To check only the shared Rust examples, run `just docs-examples`.
+
+### Instrument Applications Examples
+
+Run the examples displayed in the tool, LLM, and middleware guides against the
+current Python, Node.js, and Rust SDKs:
+
+```bash
+just test-instrumentation-examples
+```
+
+The command builds the current native bindings and runs the focused example
+tests. It requires the repository's Node dependencies and normal native build
+tools. It uses locked dependencies and isolated test configuration, and does
+not require a model-provider credential.
+
+Keep example source in `docs/instrument-applications/_code/` and display that
+file with a Fern `Code` component. Add the corresponding native example test
+when adding or changing a shared example. The source-reference check reports
+shared files or documentation references missing from the registered coverage.
+The Check job runs these focused tests when instrumentation documentation
+changes. The language SDK jobs also include their corresponding example tests
+when SDK code changes.
+
+These tests cover local application callbacks, returned results, lifecycle
+events, middleware, and cleanup. External provider behavior and independent
+reader comprehension require separate verification.
+
+### Plugin API Examples
+
+Run the examples displayed in the capability API references and the Resource
+Metrics collection guide against the current Python, Node.js, and Rust SDKs:
+
+```bash
+just test-plugin-api-examples
+```
+
+This command builds the current bindings, executes the displayed Python and
+Node.js snippets, and compiles the Rust files displayed with Fern `Code`
+components. Tests check API compatibility, documented outcomes, cleanup, and
+the illustrative JSON schemas. The pricing test also checks the expected-cost
+table against the displayed catalog entry. The source inventory check rejects
+executable snippets missing from the registered coverage.
+
+The examples use isolated configuration and require no model-provider
+credentials. Subscriber construction and lifecycle checks do not demonstrate
+delivery to an external collector. Resource readings depend on the machine;
+tests check their structure rather than exact CPU or memory values.
+
+## Fern Publishing
+
+NeMo Relay uses a dual-branch Fern publishing model. Authors edit documentation
+on `main` in `docs/` and `fern/`. The generated Fern content on
+`docs-website` is managed by CI and must not be edited by hand. The branch root
+`.gitignore`, `README.md`, and `.github/workflows/publish-fern-docs.yml` are
+branch-local maintenance files and can be updated directly on `docs-website`.
+
+The Fern workflow uses the `FERN_TOKEN` GitHub environment secret from the
+`fern` environment. Pull-request branches under `pull-request/**` get Fern
+previews when docs change, and merged pull requests clean up their preview
+deployment. Pushes to `main` sync the generated `fern/pages-dev/` layout to
+`docs-website` and publish the dev docs. Raw SemVer tags such as `0.1.0`,
+`0.1.0-beta.1`, and `0.1.0-rc.1` create public docs versions displayed with a
+leading `v`. Prerelease indicators are stripped from the public docs version
+path, so `0.1.0-beta.1`, `0.1.0-rc.1`, and `0.1.0` all target `v0.1.0`. Stable
+tags use `availability: stable` and update the default `Latest` version. Beta
+and release-candidate tags use `availability: beta`, replace the same base
+version snapshot, and do not update `Latest`. Alpha tags are not published.
+
+The branch sync and version snapshot logic lives in
+`scripts/docs/sync_fern_docs_branch.py`.
+
+## Licensing and Headers
+
+All source files must include SPDX headers and remain under Apache 2.0 expectations. Reviewers check this during normal review even when hooks do not enforce it automatically.

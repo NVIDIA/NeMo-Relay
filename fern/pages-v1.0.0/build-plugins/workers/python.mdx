@@ -1,0 +1,305 @@
+---
+title: "Python Worker"
+description: "Build, package, activate, verify, and remove the checked Python worker."
+position: 31
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The `examples/python-grpc-worker-plugin` package uses `nemo-relay-plugin` 1.0.0.
+It supports all 17 [callback types](/build-plugins/workers/middleware-and-continuations).
+Its configuration selects which callbacks to register. The SDK handles generated
+protobuf bindings, the authenticated server, and task cancellation.
+
+## Inspect Normalized LLM Content
+
+Worker codec capabilities return normalized dictionaries. Keep those dictionaries
+for callbacks and encoding. Use async helpers in `nemo_relay_plugin.codecs` to
+select content through the Rust host:
+
+```python
+from nemo_relay_plugin import codecs
+
+# Inside an async callback, using the component's ctx.runtime:
+async def inspect_request(runtime, annotation):
+    view = await codecs.last_message(runtime, annotation)
+    if view is not None:
+        print(view.text())
+        for entry in view.parts():
+            print(entry.kind, entry.location.message_index, entry.location.field)
+```
+
+Each selection makes one authenticated `InspectLlmContent` RPC. The host applies
+the shared Rust selection, typed traversal, and text extraction policies, then
+returns a complete owned snapshot. Reading `parts()`, `text_parts()`, `text()`,
+locations, and tool payloads is local and makes no further RPCs. Python adapts
+the typed response; it does not recognize providers, search history, scan native
+JSON, or decide text eligibility.
+
+These helpers accept normalized annotations from codec decoding, request
+intercepts, or event category profiles. They do not decode raw provider payloads.
+Use the invocation's `WorkerRequestCodec.decode()` or
+`WorkerResponseCodec.decode()` capability first when starting with a raw
+request or response. The standalone SDK does not require the main `nemo_relay`
+runtime extension.
+
+| Async worker helper | Host selection |
+| --- | --- |
+| `last_message(runtime, request)` | Exactly the final request item, or `None` for empty history |
+| `message(runtime, request, index)` | Any history item, including negative Python indices |
+| `instructions_view(runtime, request)` | Top-level instructions, without a history fallback |
+| `output(runtime, response)` | Current normalized message and separate calls, including textless output |
+| `MessageView.from_message(runtime, message)` | A standalone normalized message dictionary |
+| `MessageView.from_content(runtime, content)` | A standalone string or normalized content-part list |
+
+The named text helpers `system_prompt(runtime, request)`,
+`last_user_message(runtime, request)`, and `response_text(runtime, response)`
+also await host inspection. Selection never skips a selected textless item to
+find another item with text. Default extraction includes text/refusals and
+supported shallow native fallbacks; tools, reasoning, media, and arbitrary nested
+metadata are excluded. Empty text remains distinct from absent text.
+
+Returned entries and payload views follow the
+[Python snapshot surface](/integrate-into-frameworks/provider-codecs#python-content-snapshots).
+Tool payloads retain their string, JSON, null, or complete-content representation.
+Authoritative text strings come from Rust; `text()` only joins those strings
+with newlines, preserving whitespace and empty parts.
+
+**Ownership:** inspection sends normalized content fields, omitting unrelated
+request/response metadata. It materializes an owned transport projection rather
+than borrowing across processes. After the RPC completes, the host retains no
+snapshot handle. Python stores an immutable local snapshot; iterators and
+entries remain usable after the input, runtime, or parent view is deleted.
+Later input edits do not change it. Returned media/native and tool payload
+values are independent Python dictionaries/lists. Locations describe the
+original normalized source, not editing handles or provider-wire offsets.
+Execution message limits apply to both the request and returned snapshot.
+
+The equivalent Rust worker method is
+`runtime.inspect_llm_content(ContentSource::Request(&request), ContentSelection::LastMessage).await`.
+Local Rust/native-plugin readers can use
+`ContentSelection::select(...)` and `MessageView::snapshot()` directly. All
+routes use the same Rust policies; dictionary callback contracts are unchanged.
+
+This is an additive worker v1 operation. Existing decode/encode RPCs and their
+fields remain unchanged. On an older host, inspection raises `WorkerSdkError`
+with an unsupported-feature message; it never falls back to Python extraction.
+Upgrade the host and SDK together when using the new helpers. Explicit history
+indices outside the supplied request raise `IndexError`; malformed input,
+expired activations, and transport/message-limit failures remain errors.
+Cancellation propagates without retries or local fallback. Mutable redaction
+and live streaming extraction remain separate work.
+
+## Internal Diagnostic Observations
+
+Use `await runtime.diagnostics()` to obtain diagnostics for the activation.
+The SDK sets up delivery once and reuses the host's selected context. It does
+not create a worker-local store or enable diagnostic collection.
+
+This example matches the Rust native and Rust worker example. Register its
+component once during setup, then retain it in the callbacks that perform lookups.
+Python supports `async def register`, so that hook can await the helper using
+`ctx.runtime`. Keep both returned handles for the activation.
+It declares separate failure and success codes, records positive occurrence counts,
+and attaches a request ID. Call the failure helper only after observing an
+unavailable backend. Call the success helper only after a completed lookup.
+
+<Code src="_code/internal_diagnostics.py" language="python" title="Lookup diagnostics" lines="4-72" showLineNumbers={false} />
+
+Handle registration and recording failures separately from execution failures.
+Python raises `DiagnosticDeliveryError`, whose `kind` field identifies the error.
+The helpers expose those errors so the caller can apply its delivery policy.
+Do not propagate an optional diagnostic failure as the lookup's result.
+
+`try_record_lazy` returns `None` after local queue admission. It does not return a
+host acceptance receipt. An inactive component returns without recording. Disabled
+or unsupported collection skips the observation factory. A full queue also skips
+the factory. `diagnostics.availability` reports negotiated availability.
+
+Check `diagnostics.delivery_stats()` for dropped, rejected, and uncertain work.
+Use `await diagnostics.flush(timeout)` to wait for earlier queue work.
+The timeout is in seconds. Flush does not return per-record receipts or acknowledge
+disk storage. Never replay uncertain observations into a new session.
+
+Use `await component.close()` when the component's work ends. SDK shutdown
+limits diagnostic drain time and closes delivery tasks. Explicit delivery shutdown
+uses `await diagnostics.close(timeout)`. Canonical snapshot and memory reads are
+not available to workers, even when a native plugin has a read grant.
+
+Refer to [Plugin Diagnostics](/build-plugins/diagnostics) for the shared pattern,
+built-in code declarations, and native/worker API differences. The
+[delivery protocol](/build-plugins/workers/grpc-v1-protocol#diagnostic-delivery)
+defines host limits, retries, and session authority.
+
+## Test the Package
+
+Run the package tests before creating a managed environment.
+
+From the repository root, enter the example directory and run its tests:
+
+```bash
+cd examples/python-grpc-worker-plugin
+uv run --locked --group test pytest
+```
+
+Every test creates its own worker instance and mock host context, and any one test can
+be selected by node ID without running the rest of the suite. The tests separate
+configuration, JSON Schema, source digest, wheel packaging, registration metadata,
+sanitizers, policies, request outcomes, continuations, streams, and runtime cleanup.
+A digest mismatch is a packaging failure, not an activation warning.
+
+## Define the Installable Python Package
+
+Relay creates the managed environment from the package root named by the
+[manifest](/build-plugins/package-discoverable-plugins). A
+minimal `pyproject.toml` therefore needs a standard build backend, a package, and the
+1.0.0 worker SDK dependency:
+
+<Code src="../_code/python-worker/pyproject.toml" language="toml" title="pyproject.toml" lines="4-19" showLineNumbers={false} />
+
+The module entrypoint is an async function, not a server factory or a prebound port.
+Relay supplies the authenticated endpoint and activation credentials when it starts the
+managed command.
+
+## Configure the Snapshot Location
+
+Before starting a worker, Relay copies its package and runtime files into an
+activation snapshot. This is a separate directory for that activation. Set
+`NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts Relay to choose
+where snapshots are stored. Relay creates the directory if needed. Keep it
+outside plugin packages and all copied entrypoint and library directories:
+
+```powershell
+$env:NEMO_RELAY_PLUGIN_SNAPSHOT_DIR = "C:\\nrs"
+```
+
+```bash
+export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
+```
+
+```python
+from nemo_relay_plugin import ConfigDiagnostic, DiagnosticLevel, Json, PluginContext, WorkerPlugin, serve_plugin
+
+class ExamplePythonWorker(WorkerPlugin):
+    plugin_id = "examples.python_grpc_worker"
+    allows_multiple_components = False
+
+    def validate(self, config: Json) -> list[ConfigDiagnostic]:
+        return validate_config(config)
+
+    def register(self, ctx: PluginContext, config: Json) -> None:
+        diagnostics = validate_config(config)
+        errors = [
+            item for item in diagnostics
+            if item.level == DiagnosticLevel.ERROR
+        ]
+        if errors:
+            raise ValueError(errors[0].message)
+        settings = normalized_config(config)
+        if settings["observe"]["enabled"]:
+            self._register_observation(
+                ctx, settings["tag"], settings["observe"]
+            )
+        if settings["requests"]["enabled"]:
+            self._register_requests(
+                ctx,
+                settings["tag"],
+                settings["requests"],
+                settings["execution"],
+            )
+        self._register_runtime(ctx, settings["tag"], settings["runtime"])
+        if settings["execution"]["enabled"]:
+            self._register_execution(ctx, settings["tag"], settings["execution"])
+
+async def main() -> None:
+    await serve_plugin(ExamplePythonWorker())
+```
+
+Relay calls validation before registration, but `register` still rejects invalid direct
+use instead of assuming every possible host followed the expected sequence.
+
+The corresponding manifest tells Relay to install this directory and import `main` from
+the installed module. Calculate the `<worker-source-sha256>` placeholder from the current
+`worker.py`; changing that file requires a new digest.
+
+<Code src="../_code/python_grpc_worker/python/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-32" showLineNumbers={false} />
+
+The manifest requires Relay 1.0 and the typed `nvidia.nemo.relay.worker.v1`
+protocol. `ToolNext.call()` returns `ToolExecutionResult`. Its `result` holds the
+application payload. Its optional `annotation` holds metadata that Relay does not
+read. Refer to the
+[protocol reference](/build-plugins/workers/grpc-v1-protocol) for the complete boundary.
+
+## Install and Activate the Package
+
+Use the following procedure to install the package into Relay's managed environment and
+start the worker:
+
+1. From `examples/python-grpc-worker-plugin`, create a clean temporary Relay state and
+   add the manifest.
+
+   ```bash
+   relay_tmp="$(mktemp -d)"
+   relay_config="$relay_tmp/gateway.toml"
+   : > "$relay_config"
+   nemo-relay --config "$relay_config" plugins add ./relay-plugin.toml
+   ```
+
+   `plugins add` creates an isolated managed environment and installs
+   `source.manifest_root` with pip. Set `NEMO_RELAY_PYTHON` only for this add operation
+   when Relay must use a non-default base interpreter. Standard pip index, proxy,
+   certificate, and wheelhouse variables control dependency resolution.
+
+2. Allow the unsigned example artifact. By default Relay requires a trusted
+   signature for dynamic plugins, and the example manifest has only an
+   `integrity.sha256` digest. For this local walkthrough, relax attestation in
+   the `plugins.toml` that `plugins add` wrote next to `gateway.toml`:
+
+   ```bash
+   printf '\n[plugins.policy.defaults]\nattestation = "integrity_only"\n' \
+     >> "$relay_tmp/plugins.toml"
+   ```
+
+   Run this once. If the file already has a `[plugins.policy.defaults]` table,
+   add the `attestation` line to that table instead, because TOML rejects a
+   repeated table.
+
+   Sign the artifact and configure `trusted_public_keys` instead for any shared
+   or production host. See [Discoverable Plugins](/configure-plugins/discoverable-plugins).
+
+3. Enable the component and start Relay.
+
+   ```bash
+   nemo-relay --config "$relay_config" plugins enable examples.python_grpc_worker
+   nemo-relay --config "$relay_config" --bind 127.0.0.1:4040
+   ```
+
+   The activation report should identify `examples.python_grpc_worker`, and the worker
+   handshake should advertise all 17 supported surfaces.
+
+## Verify Behavior and Clean Up
+
+Use the following procedure to verify each callback family and clean up the managed
+environment:
+
+1. Exercise one allowed and one blocked tool, one allowed and one blocked model, a unary
+   LLM continuation, and a multi-chunk stream. Confirm configured headers, sanitized
+   event fields, preserved annotations, pending marks, and lazy chunk transformation.
+2. Cancel a long-running async callback and abandon a worker stream. Confirm the SDK
+   task receives cancellation and the worker's `finally` cleanup runs. A synchronous
+   callback cannot be preempted, so the example keeps synchronous work bounded.
+3. Emit a mark, use a nested scope, create and bind an isolated stack, then force a
+   failure. Confirm the prior scope context is restored and the stack is dropped.
+4. Stop Relay with `Ctrl+C`, then remove the plugin and delete the temporary state from
+   the shell where `relay_tmp` and `relay_config` remain defined.
+
+   ```bash
+   nemo-relay --config "$relay_config" plugins remove examples.python_grpc_worker
+   rm -rf -- "$relay_tmp"
+   ```
+
+`plugins remove` deletes the Relay-managed environment. Copying a Python worker manifest
+into `plugins.toml` is not an equivalent installation path because no attested environment
+would exist. Check that Relay creates and later removes the managed environment. Each feature
+group must produce the expected result. Cancellation must run cleanup, and no
+worker process should remain after shutdown.

@@ -1,0 +1,60 @@
+---
+title: "Install Overview"
+description: "Choose CLI, framework, harness, or API installation for Relay."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Choose the component that matches your agent, framework, or application. Each
+page starts with its primary installation commands.
+
+<CardGroup cols={2}>
+<Card title="CLI" icon="fa-solid fa-terminal" href="/getting-started/installation/cli">
+Install the Relay executable for supported coding agents.
+
+<div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem", marginTop: "1rem" }}>
+<Badge intent="note" minimal>Claude Code</Badge>
+<Badge intent="note" minimal>Codex</Badge>
+</div>
+</Card>
+
+<Card title="Frameworks" icon="fa-solid fa-layer-group" href="/getting-started/installation/frameworks">
+Add the Relay integration for your existing agent framework.
+
+<div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem", marginTop: "1rem" }}>
+<Badge intent="note" minimal>Google ADK</Badge>
+<Badge intent="note" minimal>LangChain</Badge>
+<Badge intent="note" minimal>LangGraph</Badge>
+<Badge intent="note" minimal>Deep Agents</Badge>
+</div>
+</Card>
+
+<Card title="Harnesses" icon="fa-solid fa-plug" href="/getting-started/installation/harnesses">
+Install Relay through your agent's native integration or plugin.
+
+<div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem", marginTop: "1rem" }}>
+<Badge intent="note" minimal>Hermes Agent</Badge>
+<Badge intent="note" minimal>OpenClaw</Badge>
+</div>
+</Card>
+
+<Card title="APIs" icon="fa-solid fa-code" href="/getting-started/installation/apis">
+Add Relay directly to your application through a language API.
+
+<div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem", marginTop: "1rem" }}>
+<Badge intent="note" minimal>Python SDK</Badge>
+<Badge intent="note" minimal>Node.js SDK</Badge>
+<Badge intent="note" minimal>Rust SDK</Badge>
+</div>
+</Card>
+</CardGroup>
+
+CLI and language package commands install the latest stable Relay release.
+Agent harnesses manage their compatible Relay dependencies. Quick starts pin
+their example versions and include configuration, a first task, and verification.
+
+For administrator-managed services, use [Deploy Overview](/getting-started/deploy).
+For a first working example, use [Quick Starts](/getting-started/quick-start).
+For source builds or repository development, use
+[Development Setup](/contribute/development-setup).

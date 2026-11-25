@@ -1,0 +1,353 @@
+---
+title: "Plugin Helpers"
+description: "Plugin configuration, validation, activation, and registration helpers."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `crates/node/dist/plugin.d.ts`.
+
+Import from `nemo-relay-node/plugin`.
+
+Plugin configuration, validation, activation, and registration helpers.
+
+## Interfaces
+
+### `ConfigPolicy`
+
+Handling for unknown or unsupported plugin configuration.
+
+```ts
+export interface ConfigPolicy {
+    unknown_component?: UnsupportedBehavior;
+    unknown_field?: UnsupportedBehavior;
+    unsupported_value?: UnsupportedBehavior;
+}
+```
+
+### `ComponentConfigs`
+
+```ts
+export interface ComponentConfigs {
+    adaptive: AdaptivePluginConfig;
+    observability: ObservabilityConfig;
+    pii_redaction: PiiRedactionConfig;
+    pricing: PricingConfig;
+    resource_metrics: ResourceMetricsConfig;
+}
+```
+
+### `OpenComponentSpec`
+
+Component created by `ComponentSpec` for a kind registered with `registerPlugin`.
+
+```ts
+export interface OpenComponentSpec<C extends object = JsonObject> {
+    kind: string;
+    enabled?: boolean;
+    config?: C & OpenComponentConfig;
+}
+```
+
+### `PluginConfig`
+
+Plugin configuration document.
+
+```ts
+export interface PluginConfig {
+    version?: number;
+    components?: ComponentSpec[];
+    policy?: ConfigPolicy;
+    /** Host service profile read at startup; omitted settings come from config files. */
+    diagnostics?: {
+        enabled?: boolean;
+        limits?: Record<string, number>;
+    };
+}
+```
+
+### `Plugin`
+
+Callbacks a plugin kind provides.
+
+```ts
+export interface Plugin {
+    /** Validates one component config. */
+    validate?: (pluginConfig: JsonObject) => ConfigDiagnostic[] | null | undefined;
+    /** Installs middleware and subscribers for one component; throwing aborts initialization. */
+    register: (pluginConfig: JsonObject, context: PluginContext) => void;
+}
+```
+
+## Functions
+
+### `defaultConfig`
+
+Creates an empty plugin configuration.
+
+The document has `version` 1 and no components. Add components to it, then pass it to `validate` or `initialize`.
+
+**Returns**
+
+A plugin configuration with no components.
+
+**Remarks**
+
+Editing the returned object changes nothing until it is passed to `initialize`.
+
+```ts
+export declare function defaultConfig(): PluginConfig;
+```
+
+### `ComponentSpec` function
+
+Creates one component entry for `PluginConfig.components`.
+
+For a built-in kind, `config` is checked against that kind's config type. For a kind registered with `register`, `config` is any JSON object.
+
+**Parameters**
+
+- `kind`: Plugin kind name.
+- `config`: Config handed to the plugin's hooks.
+- `options`: `enabled` controls whether the component activates.
+
+**Returns**
+
+A component entry for a plugin configuration.
+
+**Remarks**
+
+With `enabled` false, `initialize` validates the component but does not activate it.
+
+```ts
+export declare function ComponentSpec<K extends ComponentKind>(kind: K, config?: ComponentConfigs[K], options?: {
+    enabled?: boolean;
+}): ComponentSpecFor<K>;
+```
+
+### `ComponentSpec` function
+
+```ts
+export declare function ComponentSpec<K extends string, C extends JsonObjectCompatible<C> = JsonObject>(kind: K extends ComponentKind ? never : K, config?: C, options?: {
+    enabled?: boolean;
+}): OpenComponentSpec<C>;
+```
+
+### `initialize`
+
+Initializes the plugin host and activates the configured plugins.
+
+The system and user `plugins.toml` files are merged first and `config` is applied on top of them.
+
+**Parameters**
+
+- `config`: Programmatic configuration. Its values override the files.
+- `additionalPluginsToml`: Path of one more `plugins.toml` to merge. If the file is missing, the report carries a `plugin.configuration_file_missing` warning.
+
+**Returns**
+
+The activation, which holds the host report.
+
+**Remarks**
+
+Plugin callbacks run only while the activation is alive. End it with `close()` or `await using`.
+
+```ts
+export declare function initialize(config: PluginConfig, additionalPluginsToml?: string): Promise<PluginHostActivation>;
+```
+
+### `validate`
+
+Validates the plugin host configuration without loading plugin code.
+
+The files and `config` are merged exactly as `initialize` merges them, and the merged result is checked.
+
+**Parameters**
+
+- `config`: Programmatic configuration. Its values override the files.
+- `additionalPluginsToml`: Path of one more `plugins.toml` to merge. If the file is missing, the report carries a `plugin.configuration_file_missing` warning.
+
+**Returns**
+
+The report for static components and dynamic plugins.
+
+**Remarks**
+
+Nothing is activated and no host lease is taken.
+
+```ts
+export declare function validate(config: PluginConfig, additionalPluginsToml?: string): PluginHostReport;
+```
+
+### `validateExact`
+
+Validates one plugin configuration document by itself.
+
+No `plugins.toml` file is read or merged, so `config` must be the whole document.
+
+**Parameters**
+
+- `config`: Complete plugin configuration.
+
+**Returns**
+
+The report for the static components in `config`.
+
+**Remarks**
+
+Host-only `diagnostics` settings are rejected here. Use `validate` to check them.
+
+```ts
+export declare function validateExact(config: PluginConfig): PluginHostReport;
+```
+
+### `listKinds`
+
+Lists the plugin kinds in the registry.
+
+A plugin configuration can reference any of these kinds.
+
+**Returns**
+
+The registered plugin kind names.
+
+**Remarks**
+
+A registered kind is not necessarily active in the current configuration.
+
+```ts
+export declare function listKinds(): string[];
+```
+
+### `register`
+
+Registers a plugin kind implemented in JavaScript.
+
+`plugin.validate` runs when a configuration is validated. `plugin.register` runs when `initialize` activates a component of this kind.
+
+**Parameters**
+
+- `pluginKind`: Unique plugin kind name.
+- `plugin`: The `validate` and `register` hooks.
+
+**Returns**
+
+Nothing.
+
+**Remarks**
+
+Without `plugin.validate`, any config for this kind passes validation.
+
+```ts
+export declare function register(pluginKind: string, plugin: Plugin): void;
+```
+
+### `deregister`
+
+Removes a plugin kind from the registry.
+
+Configurations validated or initialized after this call cannot reference the kind.
+
+**Parameters**
+
+- `pluginKind`: Name the kind was registered under.
+
+**Returns**
+
+`true` if the kind was registered, `false` if it was not.
+
+**Remarks**
+
+Components of this kind that are already active keep running until their activation closes.
+
+```ts
+export declare function deregister(pluginKind: string): boolean;
+```
+
+## Type Aliases
+
+### `UnsupportedBehavior`
+
+How unsupported configuration is handled.
+
+```ts
+export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
+```
+
+### `ComponentKind`
+
+```ts
+export type ComponentKind = keyof ComponentConfigs;
+```
+
+### `KnownComponentSpec`
+
+```ts
+export type KnownComponentSpec = {
+    [K in ComponentKind]: {
+        kind: K;
+        enabled?: boolean;
+        config?: ComponentConfigs[K];
+    };
+}[ComponentKind];
+```
+
+### `OpenComponentConfig`
+
+Config returned by `ComponentSpec` for a kind registered with `registerPlugin`.
+
+```ts
+export type OpenComponentConfig = {
+    readonly [openComponent]: true;
+};
+```
+
+### `ComponentSpecFor`
+
+```ts
+export type ComponentSpecFor<K extends string> = K extends ComponentKind ? Extract<KnownComponentSpec, {
+    kind: K;
+}> : OpenComponentSpec;
+```
+
+### `ComponentSpec` type alias
+
+One plugin component.
+
+```ts
+export type ComponentSpec = KnownComponentSpec | OpenComponentSpec<object>;
+```
+
+## Re-exports
+
+- `ConfigDiagnostic`
+- `ConfigReport`
+- `DynamicPluginCheckState`
+- `DynamicPluginFailure`
+- `DynamicPluginKind`
+- `DynamicPluginValidationReport`
+- `DynamicPluginValidationStatus`
+- `EventMetadata`
+- `EventMetadataScalar`
+- `EventMetadataValue`
+- `LlmApplicationExecutionContext`
+- `LlmCodecIdentity`
+- `LlmExecutionContext`
+- `LlmOptimizationContribution`
+- `LlmOptimizationDataSchema`
+- `LlmOptimizationModel`
+- `LlmOptimizationModelTransition`
+- `LlmOptimizationTokenImpact`
+- `LlmOptimizationTokens`
+- `LlmRequestContext`
+- `LlmRequestInterceptOutcome`
+- `LlmResponseContext`
+- `LlmSanitizeRequestContext`
+- `LlmSanitizeResponseContext`
+- `PluginContext`
+- `PluginHostActivation`
+- `PluginHostReport`
+- `RuntimeDiagnostic`
+- `ToolExecutionInterceptOutcome`
+

@@ -1,0 +1,380 @@
+---
+title: "Adaptive Helpers"
+description: "Adaptive plugin configuration helpers."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `crates/node/dist/adaptive.d.ts`.
+
+Import from `nemo-relay-node/adaptive`.
+
+Adaptive plugin configuration helpers.
+
+## Interfaces
+
+### `BackendSpec`
+
+Adaptive state backend.
+
+```ts
+export interface BackendSpec {
+    kind: string;
+    config?: Record<string, Json>;
+}
+```
+
+### `StateConfig`
+
+Adaptive state configuration.
+
+```ts
+export interface StateConfig {
+    backend: BackendSpec;
+}
+```
+
+### `TelemetryConfig`
+
+Adaptive telemetry settings.
+
+```ts
+export interface TelemetryConfig {
+    subscriber_name?: string;
+    learners?: string[];
+}
+```
+
+### `AdaptiveHintsConfig`
+
+Adaptive hints injection settings.
+
+```ts
+export interface AdaptiveHintsConfig {
+    priority?: number;
+    break_chain?: boolean;
+    inject_header?: boolean;
+    inject_body_path?: string;
+}
+```
+
+### `ToolParallelismConfig`
+
+Adaptive tool scheduling settings.
+
+```ts
+export interface ToolParallelismConfig {
+    priority?: number;
+    mode?: 'observe_only' | 'inject_hints' | 'schedule' | (string & {});
+}
+```
+
+### `AcgStabilityThresholds`
+
+Prompt-stability thresholds for the cache governor.
+
+```ts
+export interface AcgStabilityThresholds {
+    stable_threshold?: number;
+    semi_stable_threshold?: number;
+    min_observations_for_full_confidence?: number;
+}
+```
+
+### `AcgConfig`
+
+Cache governor settings.
+
+```ts
+export interface AcgConfig {
+    provider?: 'anthropic' | 'openai' | 'passthrough' | (string & {});
+    observation_window?: number;
+    priority?: number;
+    stability_thresholds?: AcgStabilityThresholds;
+}
+```
+
+### `Config`
+
+Adaptive component config.
+
+```ts
+export interface Config {
+    version?: number;
+    agent_id?: string;
+    state?: StateConfig;
+    telemetry?: TelemetryConfig;
+    adaptive_hints?: AdaptiveHintsConfig;
+    tool_parallelism?: ToolParallelismConfig;
+    acg?: AcgConfig;
+    policy?: ConfigPolicy;
+}
+```
+
+### `ComponentSpec` interface
+
+Adaptive component with kind `adaptive`.
+
+```ts
+export interface ComponentSpec {
+    kind: 'adaptive';
+    enabled?: boolean;
+    config: AdaptivePluginConfig;
+}
+```
+
+## Classes
+
+### `AdaptiveRuntime`
+
+Adaptive runtime owned by the caller.
+
+```ts
+export declare class AdaptiveRuntime {
+    #private;
+    constructor(config: Config);
+    /** Registers configured runtime features. */
+    register(): Promise<void>;
+    /** Removes registered runtime features. */
+    deregister(): void;
+    /** Shuts the runtime down for good. */
+    shutdown(): Promise<void>;
+    /** Blocks until telemetry has processed pending events. */
+    waitForIdle(): void;
+    /** Validation report from construction. */
+    report(): ConfigReport;
+    /** Binds cache governor request rewrites to a scope. */
+    bindScope(scopeHandle: ScopeHandle): void;
+    /** Builds cache request facts for an annotated LLM request. */
+    buildCacheRequestFacts(options: CacheRequestFactsOptions): CacheRequestFacts | null;
+}
+```
+
+## Functions
+
+### `defaultConfig`
+
+Creates a default adaptive config.
+
+The config has `version` 1 and no sections. Add state, telemetry, and scheduler sections to it.
+
+**Returns**
+
+An adaptive config with no sections.
+
+**Remarks**
+
+The config does nothing until it is wrapped with `ComponentSpec` and activated.
+
+```ts
+export declare function defaultConfig(): Config;
+```
+
+### `inMemoryBackend`
+
+Creates a backend spec that keeps adaptive state in process memory.
+
+The state is private to the process and is lost when it exits.
+
+**Returns**
+
+A backend spec with kind `in_memory`.
+
+**Remarks**
+
+Use `redisBackend` when several processes must share state.
+
+```ts
+export declare function inMemoryBackend(): BackendSpec;
+```
+
+### `redisBackend`
+
+Creates a backend spec that keeps adaptive state in Redis.
+
+Processes that use the same Redis instance and key prefix share the state.
+
+**Parameters**
+
+- `url`: Redis connection URL.
+- `keyPrefix`: Prefix for every key the backend writes.
+
+**Returns**
+
+A backend spec with kind `redis`.
+
+**Remarks**
+
+`keyPrefix` defaults to `nemo_relay:`.
+
+```ts
+export declare function redisBackend(url: string, keyPrefix?: string): BackendSpec;
+```
+
+### `telemetryConfig`
+
+Creates adaptive telemetry settings.
+
+Fields in `config` replace the defaults; fields left out keep them.
+
+**Parameters**
+
+- `config`: Telemetry settings to set.
+
+**Returns**
+
+Complete telemetry settings.
+
+**Remarks**
+
+`learners` defaults to an empty list.
+
+```ts
+export declare function telemetryConfig(config?: TelemetryConfig): TelemetryConfig;
+```
+
+### `adaptiveHintsConfig`
+
+Creates adaptive hint-injection settings.
+
+Fields in `config` replace the defaults; fields left out keep them.
+
+**Parameters**
+
+- `config`: Hint-injection settings to set.
+
+**Returns**
+
+Complete hint-injection settings.
+
+**Remarks**
+
+By default the injector runs at priority 100, lets the chain continue, and writes hints to `nvext.agent_hints`.
+
+```ts
+export declare function adaptiveHintsConfig(config?: AdaptiveHintsConfig): AdaptiveHintsConfig;
+```
+
+### `toolParallelismConfig`
+
+Creates adaptive tool-scheduling settings.
+
+Fields in `config` replace the defaults; fields left out keep them.
+
+**Parameters**
+
+- `config`: Tool-scheduling settings to set.
+
+**Returns**
+
+Complete tool-scheduling settings.
+
+**Remarks**
+
+The default mode `observe_only` records recommendations and leaves execution unchanged.
+
+```ts
+export declare function toolParallelismConfig(config?: ToolParallelismConfig): ToolParallelismConfig;
+```
+
+### `acgConfig`
+
+Creates adaptive cache governor settings.
+
+Fields in `config` replace the defaults; fields left out keep them.
+
+**Parameters**
+
+- `config`: Cache governor settings to set.
+
+**Returns**
+
+Complete cache governor settings.
+
+**Remarks**
+
+Thresholds in `stability_thresholds` default one by one, so one threshold can be set without the others.
+
+```ts
+export declare function acgConfig(config?: AcgConfig): AcgConfig;
+```
+
+### `ComponentSpec` function
+
+Wraps an adaptive config as a plugin component.
+
+The result is an entry for `PluginConfig.components`.
+
+**Parameters**
+
+- `config`: Adaptive config.
+- `options`: `enabled` controls whether the component activates.
+
+**Returns**
+
+A component entry with kind `adaptive`.
+
+**Remarks**
+
+With `enabled` false, `initialize` validates the component but does not activate it.
+
+```ts
+export declare function ComponentSpec(config: Config, { enabled }?: {
+    enabled?: boolean;
+}): ComponentSpec;
+```
+
+### `validateConfig`
+
+Validates adaptive config without creating a runtime.
+
+```ts
+export declare function validateConfig(config: Config): ConfigReport;
+```
+
+### `buildCacheTelemetryEvent`
+
+Builds one cache telemetry event from token usage.
+
+```ts
+export declare function buildCacheTelemetryEvent(options: CacheTelemetryEventOptions): CacheTelemetryEvent | null;
+```
+
+### `setLatencySensitivity`
+
+Sets latency sensitivity on the current scope.
+
+```ts
+export declare function setLatencySensitivity(value: number): void;
+```
+
+## Type Aliases
+
+### `AdaptivePluginConfig`
+
+```ts
+export type AdaptivePluginConfig = Config;
+```
+
+## Constants
+
+### `ADAPTIVE_PLUGIN_KIND`
+
+```ts
+export declare const ADAPTIVE_PLUGIN_KIND = "adaptive";
+```
+
+## Re-exports
+
+- `AgentIdentity`
+- `CacheRequestFacts`
+- `CacheRequestFactsOptions`
+- `CacheTelemetryEvent`
+- `CacheTelemetryEventOptions`
+- `CacheUsage`
+- `CacheWriteTokenCounts`
+- `ConfigDiagnostic`
+- `ConfigPolicy`
+- `ConfigReport`
+

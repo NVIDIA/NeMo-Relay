@@ -1,0 +1,222 @@
+---
+title: "nemo_relay_plugin.codecs"
+sidebar-title: "codecs"
+description: "Typed adapters for host-projected normalized content."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/plugin/src/nemo_relay_plugin/codecs.py`.
+
+Module `nemo_relay_plugin.codecs`.
+
+Typed adapters for host-projected normalized content.
+
+## Classes
+
+### `ContentLocation`
+
+Read-time normalized location; message_index is set for request selections.
+
+#### Methods
+
+##### `ContentLocation`
+
+```python
+def ContentLocation(root: ContentRoot, field: ContentField, index: int | None = None, message_index: int | None = None) -> None
+```
+
+Create an instance.
+
+### `PayloadView`
+
+Original tool payload representation, without JSON parsing or rendering.
+
+#### Methods
+
+##### `PayloadView`
+
+```python
+def PayloadView(kind: PayloadKind, _value: Any) -> None
+```
+
+Create an instance.
+
+##### `value`
+
+```python
+def value() -> Any
+```
+
+Return an independent Python value; JSON strings retain kind json.
+
+### `ToolCallView`
+
+Read-only invocation, preserving item and correlation identifiers.
+
+#### Methods
+
+##### `ToolCallView`
+
+```python
+def ToolCallView(id: str | None, call_id: str | None, name: str, arguments: PayloadView) -> None
+```
+
+Create an instance.
+
+### `ToolResultView`
+
+Read-only result whose complete payload is excluded from default text.
+
+#### Methods
+
+##### `ToolResultView`
+
+```python
+def ToolResultView(id: str | None, call_id: str | None, name: str | None, is_error: bool | None, payload: PayloadView) -> None
+```
+
+Create an instance.
+
+### `ContentEntry`
+
+Typed content entry sharing immutable snapshot data.
+
+#### Methods
+
+##### `ContentEntry`
+
+```python
+def ContentEntry(kind: ContentKind, location: ContentLocation, text: str | None = None, tool_call: ToolCallView | None = None, tool_result: ToolResultView | None = None, provider: str | None = None, native_kind: str | None = None, _value: Any = None) -> None
+```
+
+Create an instance.
+
+##### `value`
+
+```python
+def value() -> Any
+```
+
+Return independent media/native data, or None for text and tools.
+
+### `MessageView`
+
+Independent typed host snapshot; obtain it through an async selection helper.
+
+#### Methods
+
+##### `MessageView`
+
+```python
+def MessageView() -> None
+```
+
+Create an instance.
+
+##### `from_message`
+
+```python
+async def from_message(runtime: PluginRuntime, message: Mapping[str, Any]) -> MessageView
+```
+
+Ask the host to project one normalized message, including tool-result semantics.
+
+##### `from_content`
+
+```python
+async def from_content(runtime: PluginRuntime, content: str | list[Any]) -> MessageView
+```
+
+Ask the host to project standalone normalized content or instructions.
+
+##### `parts`
+
+```python
+def parts() -> Iterator[ContentEntry]
+```
+
+Iterate the host-projected typed entries locally, without further RPCs.
+
+##### `text_parts`
+
+```python
+def text_parts() -> Iterator[str]
+```
+
+Iterate authoritative text strings chosen by Rust; no local reclassification occurs.
+
+##### `text`
+
+```python
+def text() -> str | None
+```
+
+Join host-selected strings, preserving absent versus empty text and whitespace.
+
+## Functions
+
+### `message`
+
+```python
+async def message(runtime: PluginRuntime, request: Mapping[str, Any], index: int) -> MessageView
+```
+
+Ask the host to select a history item; negative indices count from the end.
+
+### `last_message`
+
+```python
+async def last_message(runtime: PluginRuntime, request: Mapping[str, Any]) -> MessageView | None
+```
+
+Ask the host to select exactly the final supplied request item, or return None.
+
+### `instructions_view`
+
+```python
+async def instructions_view(runtime: PluginRuntime, request: Mapping[str, Any]) -> MessageView | None
+```
+
+Ask the host to select top-level instructions without a history fallback.
+
+### `output`
+
+```python
+async def output(runtime: PluginRuntime, response: Mapping[str, Any]) -> MessageView
+```
+
+Ask the host to project the current message and separate response tool calls.
+
+### `system_prompt`
+
+```python
+async def system_prompt(runtime: PluginRuntime, request: Mapping[str, Any]) -> str | None
+```
+
+Extract instructions or the first system/developer item through the shared host selection.
+
+### `last_user_message`
+
+```python
+async def last_user_message(runtime: PluginRuntime, request: Mapping[str, Any]) -> str | None
+```
+
+Extract the last portable/native user item through the host, without backward text fallback.
+
+### `response_text`
+
+```python
+async def response_text(runtime: PluginRuntime, response: Mapping[str, Any]) -> str | None
+```
+
+Extract current response text/refusals through Rust, excluding tools and non-text data.
+
+## Type Aliases And Constants
+
+- `ContentField`
+- `ContentKind`
+- `ContentRoot`
+- `PayloadKind`
+

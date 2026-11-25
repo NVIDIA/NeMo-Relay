@@ -1,0 +1,54 @@
+---
+title: "Struct Nemo Relay Codec Callbacks"
+sidebar-title: "NemoRelayCodecCallbacks"
+description: "Custom codec callbacks, sharing one user-data allocation and destructor. Request decode and encode must be supplied together. At least one direction must be present. Callbacks can run concurrently and must be thread-safe."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayCodecCallbacks &#123;\n    pub decode: <a href=\"type-nemorelaycodecdecodefn\">NemoRelayCodecDecodeFn</a>,\n    pub encode: <a href=\"type-nemorelaycodecencodefn\">NemoRelayCodecEncodeFn</a>,\n    pub decode_response: <a href=\"type-nemorelaycodecresponsedecodefn\">NemoRelayCodecResponseDecodeFn</a>,\n    pub user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    pub free_fn: <a href=\"type-nemorelayfreefn\">NemoRelayFreeFn</a>,\n&#125;"}} /></pre>
+
+Custom codec callbacks, sharing one user-data allocation and destructor. Request decode and encode must be supplied together. At least one direction must be present. Callbacks can run concurrently and must be thread-safe.
+
+## Fields
+
+### `decode: NemoRelayCodecDecodeFn`
+
+Optional request decoder.
+
+### `encode: NemoRelayCodecEncodeFn`
+
+Optional request encoder.
+
+### `decode_response: NemoRelayCodecResponseDecodeFn`
+
+Optional response decoder.
+
+### `user_data: *mut c_void`
+
+Shared callback state. Relay owns it when the constructor call starts.
+
+### `free_fn: NemoRelayFreeFn`
+
+Destructor, invoked exactly once after the last codec reference is dropped.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayCodecCallbacks`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-nemorelaycodeccallbacks\">NemoRelayCodecCallbacks</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-nemorelaycodeccallbacks\">NemoRelayCodecCallbacks</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Copy for NemoRelayCodecCallbacks`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-nemorelaycodeccallbacks\">NemoRelayCodecCallbacks</a>"}} /></pre>

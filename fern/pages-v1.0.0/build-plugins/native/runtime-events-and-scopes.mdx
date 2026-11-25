@@ -1,0 +1,364 @@
+---
+title: "Runtime Events and Scopes"
+description: "Emit native marks and manage scope stacks with reliable cleanup."
+position: 25
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The native runtime handle lets plugin middleware participate in Relay's
+[event hierarchy](/about-nemo-relay/concepts/events)
+without linking the host runtime crate. The example's `runtime` group emits a configured
+mark, opens and closes a child scope, and optionally creates an isolated
+[scope stack](/about-nemo-relay/concepts/scopes).
+
+## Inspect Scope Identities
+
+The application process loads the native plugin library and supplies its host
+function table. Within a callback, `ctx.runtime()` reads that callback's restored
+scope binding. Retrieve a detached snapshot and select the nearest Agent:
+
+```rust
+use nemo_relay_plugin::ScopeType;
+
+let snapshot = ctx.runtime().current_scope_stack_snapshot()?;
+let agent_scope_uuid = snapshot.as_ref().and_then(|snapshot| {
+    snapshot.scopes.iter().rev()
+        .find(|entry| entry.scope_type == ScopeType::Agent)
+        .map(|entry| entry.scope_id)
+});
+// Correlate callbacks that share this Agent using (agent_scope_uuid, tool_call_id).
+```
+
+The list runs from the implicit root to the current top and retains actual
+scope UUIDs. Later push/pop operations do not change earlier snapshots.
+No explicit binding returns `None` without creating a stack; an explicitly
+bound root-only stack returns its root. Synthetic propagated entries retain
+stored types, so a synthetic Agent root is not evidence of a known upstream
+Agent. See the [visible-stack contract](/about-nemo-relay/concepts/scopes#inspect-the-visible-stack).
+
+The getter is included in the v1.0 native runtime interface. A revoked runtime
+returns an error. The SDK converts the owned checked result without retaining
+host buffers. Async callbacks inspect their restored binding on each read.
+
+## Preserve Stack Ownership
+
+A scope stack determines visible scope-local middleware, event parentage, and cleanup.
+Typed async middleware captures the callback's stack and restores it around every future
+and stream poll. The example inspects the current scope, then uses the isolated stack's
+`with_current` helper to bind it for a synchronous closure and restore the previous
+thread binding afterward. Use `ctx.spawn` or capture `ctx.task_spawner()` when middleware
+needs component-owned background tasks. These helpers restore the captured Relay scope
+around every poll and cancel the task when the component closes. They require the
+component to opt into Tokio support. Tasks created directly with `tokio::spawn` bypass
+component ownership and scope restoration.
+
+An isolated stack begins with its own root and is appropriate only when the emitted work
+should not be a child of the managed application call. The example creates the stack,
+binds it, pushes and pops its child scope, restores the previous binding, and drops the
+isolated stack through the typed guards. Those guards perform the same cleanup if the
+closure returns an error.
+
+```rust
+pub(crate) fn emit_configured_runtime_events(
+    runtime: &PluginRuntime,
+    tag: &str,
+    config: &RuntimeConfig,
+) -> nemo_relay_plugin::Result<()> {
+    let _current_scope = runtime.current_scope()?;
+    if config.emit_marks {
+        runtime.emit_mark(
+            "example.native.request.seen",
+            Some(&json!({ "tag": tag })),
+            None,
+        )?;
+    }
+
+    let mut scope = runtime.scope(
+        "example.native.request",
+        ScopeType::Custom,
+        Some(&json!({ "tag": tag })),
+        None,
+        None,
+    )?;
+    scope.close(Some(&json!({ "done": true })), None)?;
+
+    if config.emit_isolated_scope {
+        let isolated = runtime.create_scope_stack()?;
+        isolated.with_current(|| {
+            if config.emit_marks {
+                runtime.emit_mark(
+                    "example.native.isolated.mark",
+                    Some(&json!({ "tag": tag })),
+                    None,
+                )?;
+            }
+            let mut child = runtime.scope(
+                "example.native.isolated.scope",
+                ScopeType::Custom,
+                None,
+                Some(&json!({ "visibility": "isolated" })),
+                None,
+            )?;
+            child.close(Some(&json!({ "done": true })), None)
+        })?;
+    }
+    Ok(())
+}
+```
+
+`runtime.scope` returns an owning guard. Calling `close` supplies the end-event output;
+dropping an unclosed guard still follows the SDK cleanup path. `with_current` restores
+the prior stack after either `Ok` or `Err`, and dropping `isolated` releases the stack.
+When a plugin replays work captured earlier, `runtime.scope_at` and
+`ScopeGuard::close_at` accept the original `SystemTime` values while preserving the same
+guard ownership and cleanup behavior.
+
+Use `ScopeOptions` with `scope_with_options` or `push_scope_with_options` to set
+an explicit parent, start time, or `PARALLEL` and `RELOCATABLE` flags. The default
+uses the current parent, the current time, and empty flags.
+
+```rust
+use nemo_relay_plugin::{ScopeAttributes, ScopeOptions};
+
+let parent = runtime.current_scope()?;
+let mut child = runtime.scope_with_options(
+    "example.native.parallel",
+    ScopeType::Custom,
+    None,
+    None,
+    None,
+    ScopeOptions {
+        parent: Some(&parent),
+        attributes: ScopeAttributes::PARALLEL,
+        ..Default::default()
+    },
+)?;
+child.close(None, None)?;
+```
+
+## Emit Typed Telemetry and Read Diagnostics
+
+Use `emit_mark_with_options` when a mark needs a data schema or log severity. Use
+`emit_metric` to create a validated Relay metric mark rather than constructing the
+reserved metric schema yourself. The following code adds metadata to a policy mark and
+then reads one runtime diagnostic:
+
+```rust
+let schema = DataSchema::builder()
+    .name("example.policy.decision")
+    .version("1")
+    .build();
+runtime.emit_mark_with_options(
+    "example.native.policy_decision",
+    Some(&json!({ "allowed": true })),
+    None,
+    Some(&schema),
+    Some(LogSeverity::Info),
+)?;
+
+let diagnostics = runtime.runtime_diagnostics()?;
+if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
+    eprintln!("{} occurred {} times", diagnostic.message, diagnostic.count);
+}
+```
+
+Use `emit_mark_with_context` with `EmitMarkOptions` when a mark needs an explicit
+parent or timestamp. The same options record also accepts a data schema and
+severity. A retained scope handle can parent a mark after that scope closes.
+Timestamps use `SystemTime`, including times before the Unix epoch.
+
+The diagnostic snapshot is bounded and ordered by code. It is a host-level view, so it
+does not identify the plugin that recorded a diagnostic. These operations require the
+v1.0 native runtime contract.
+
+`runtime_diagnostics()` reads the legacy host report. For canonical recording and
+authorized reads, use `runtime.diagnostics()` as described in
+[Native Plugin Diagnostics](/build-plugins/native/diagnostics).
+
+## Estimate Model Cost
+
+`PluginRuntime::estimate_cost_for_provider` prices token usage with the host's
+active model pricing catalog. Use it instead of linking a pricing crate into the
+plugin: a copy inside the plugin library has no catalog. The method returns
+`Ok(None)` when the catalog has no price for the model. A host that predates
+this operation returns an error; treat that error as an unknown cost.
+
+`PluginRuntime::response_cost_for_provider` returns the cost of a normalized
+response. It keeps a cost the response already reports and otherwise applies
+the host's provider-specific billing rules.
+
+```rust
+let usage = Usage {
+    prompt_tokens: Some(1200),
+    completion_tokens: Some(80),
+    ..Usage::default()
+};
+let cost = runtime
+    .estimate_cost_for_provider(Some("openai"), "gpt-4o", &usage)
+    .ok()
+    .flatten()
+    .and_then(|estimate| estimate.total);
+```
+
+## Control Global Runtime Registrations
+
+The checked runtime provides activation-owned registration discovery and conditional
+middleware guardrail control. `PluginRuntime::list_runtime_registrations`
+returns structured global identities. A background plugin task can call
+`register_conditional_middleware_guardrail`, retain the returned opaque handle,
+and call `deregister_conditional_middleware_guardrail` when the target should
+be eligible for future snapshots again.
+
+Relay evaluates the callback synchronously in the trusted in-process plugin and
+fails open if the callback reports an ABI error. The plugin can remove only gates
+owned by its activation, and Relay removes remaining gates and releases their
+callback state while keeping library code resident. Use
+`PluginContext::register_conditional_middleware_guardrail` for a gate that must
+exist as part of the initial registration transaction.
+
+The following registration uses the example's validated, disabled-by-default
+`registration_control` group:
+
+```rust
+if config.registration_control.enabled {
+    let kinds = config.registration_control.kinds.iter().copied().collect();
+    let blocked_registration_name = config.registration_control.registration_name.clone();
+    let callback_registration_name = blocked_registration_name.clone();
+    let reason = config.registration_control.reason.clone();
+    context.register_conditional_middleware_guardrail(
+        "documentation_registration_control_block",
+        &kinds,
+        &blocked_registration_name,
+        move |_, registration_name| {
+            (registration_name == callback_registration_name)
+                .then(|| reason.clone())
+        },
+    )?;
+    context.register_conditional_middleware_guardrail(
+        "documentation_registration_control_allow",
+        &kinds,
+        &config.registration_control.allowed_registration_name,
+        |_, _| None,
+    )?;
+}
+```
+
+The first callback returns a reason and disables its matching registration. The second
+callback returns `None` and leaves its matching registration enabled. The callback
+registration functions use checked ABI-safe descriptors.
+Refer to
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+for the complete discovery, ordering, snapshot, and cleanup contract.
+
+## Configure the SDK Executor
+
+The SDK defaults to inline execution with no plugin runtime. `Plugin::executor_config`
+returns `None` unless the plugin opts into Tokio support. Return `Some(config)` to use
+Tokio timers, networking, or component-owned background tasks. The example requests two
+worker threads.
+
+An explicit `executor` object also opts the component into Tokio support. The standard
+`executor_config_for_component` resolver accepts a positive `executor.worker_threads`
+integer. If that property is absent, it uses the plugin's configured default or two
+workers if the plugin has no default. Tokio-enabled components
+of the same plugin share a library-local runtime and must request the same worker count.
+Inline components do not use that runtime. Because the example schema rejects unknown
+values, it declares the executor object as part of its supported configuration.
+
+The worker count controls runtime services and background tasks. Inline middleware does
+not need a thread pool. Increase the count only when measurements show that the shared
+runtime needs more capacity, and keep inline callbacks nonblocking.
+
+```rust
+impl Plugin for ExampleNativePlugin {
+    fn validate(&self, config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        let mut diagnostics = config::validate(config);
+        if let Err(message) = self.executor_config_for_component(config) {
+            diagnostics.push(ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "examples.rust_native_policy.invalid_executor".into(),
+                component: Some("examples.rust_native_policy".into()),
+                field: Some("executor.worker_threads".into()),
+                message,
+            });
+        }
+        diagnostics
+    }
+
+    fn executor_config(&self) -> Option<NativeExecutorConfig> {
+        Some(NativeExecutorConfig { worker_threads: 2 })
+    }
+}
+```
+
+This example requests a shared runtime with two workers. An explicit
+`executor.worker_threads = 4` requests four workers and must agree with other active
+Tokio-enabled components of that plugin. Zero, negative, fractional, and nonnumeric
+values are validation errors. A plugin that returns `None` and has no executor object
+uses inline execution without creating a Tokio runtime.
+
+Use component-owned spawning for background work:
+
+```rust
+let spawner = ctx.task_spawner();
+let task = spawner.spawn(async move {
+    // Use Tokio I/O here. Relay scope is restored around each poll.
+    Ok(())
+})?;
+drop(task); // The component still owns the task and cancels it during close.
+```
+
+Capture the cloneable spawner in a registered callback when it needs to start work
+later. `ctx.spawn(...)` provides the same ownership during registration. Handle a
+spawn error if the component has closed or has not enabled Tokio support. Dropping a
+join handle detaches the waiter; it does not release component ownership. Do not use
+untracked `tokio::spawn` calls for component work.
+
+## Verify Runtime Cleanup
+
+Use the following procedure to verify parentage, restoration, executor settings, and
+failure cleanup:
+
+1. Activate `runtime.emit_marks = true` and `emit_isolated_scope = true` with two executor
+   workers.
+2. Run a managed call inside a named scope. Confirm the plugin mark and ordinary child
+   scope use that call as their parent.
+3. Confirm the isolated scope uses its new root and has no accidental parent from the
+   caller.
+4. In a host integration test, make one runtime operation fail after a push. Confirm the
+   scope guard closes the scope, `with_current` restores the former stack, and dropping
+   the isolated stack releases its host handle.
+5. Run unrelated work on the same runtime thread and confirm its current stack is
+   unchanged. Then close the component and verify that its tasks stop. If another
+   component shares its runtime, verify that the other component still works; the
+   runtime stops after its last component closes.
+
+Success means event parentage is intentional, no scope or isolated stack leaks on
+failure, later work regains its original context, and component cleanup releases
+callback ownership while its library remains resident.
+
+## Record Internal Diagnostics
+
+Use `ctx.runtime().diagnostics()` to obtain the canonical SDK facade. Register a
+stable component during setup and retain it in callbacks that perform internal
+work. Disabled or unsupported facades skip lazy declaration and observation
+factories. The host still owns recording load, validation, registration, and
+callback failures.
+
+The [native SDK diagnostics guide](/build-plugins/native/diagnostics#record-internal-observations)
+provides a complete recording example. The
+[shared plugin guide](/build-plugins/diagnostics) compares the same example across
+Rust native, Rust gRPC, and Python gRPC.
+
+### Inspect Canonical Diagnostics
+
+Call `runtime.diagnostics().reader()` only when host policy grants
+`native_diagnostics_read_context`. This permission covers the whole selected
+context, including other components' restricted detail. It defaults to false and
+does not grant read access to workers. Recording needs no read grant.
+
+Refer to [Read Host Evidence](/build-plugins/native/diagnostics#read-host-evidence)
+for host-policy configuration and examples of discovery, snapshot, and memory
+reads. Each call checks live authority. Reader results are caller-owned and
+never automatically feed logs or exporters.

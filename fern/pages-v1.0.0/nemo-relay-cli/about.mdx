@@ -1,0 +1,96 @@
+---
+title: "Overview"
+description: "Choose a first CLI workflow, persistent integration, or detailed reference."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The NVIDIA NeMo Relay CLI provides commands to run, configure, and manage
+Relay from a terminal. Its `nemo-relay` executable supports local sessions with
+coding agents, model request routing, shared deployments, configuration, and
+diagnostics.
+
+You can use it to:
+
+- **Run and connect coding agents.** Launch supported agents, including Claude
+  Code and Codex, through Relay. You can also install persistent connections
+  so Relay loads when the agents start normally.
+- **Handle model requests and agent events.** Start a Relay gateway process that
+  receives agent events and forwards model requests to configured providers.
+  Supported requests and events can use Relay's configured observability and
+  guardrail capabilities.
+- **Configure and extend Relay.** Edit settings for exporters, guardrails, and
+  other Relay components. Install, validate, inspect, enable, disable, and remove
+  plugins that extend Relay's behavior.
+- **Manage provider connections and authentication.** Configure provider
+  endpoints and credential sources, use API key helpers, and manage OpenID
+  Connect sign-in.
+- **Operate shared deployments.** Run a Relay daemon and its workers to support
+  multiple users. The daemon keeps running between sessions. Generate
+  configuration bundles for installations managed by administrators.
+- **Inspect activity and troubleshoot.** Export captured sessions and telemetry,
+  manage pricing catalogs for cost estimates, check configuration and readiness,
+  and inspect runtime diagnostics.
+
+Available capture and control capabilities depend on the coding agent, request
+route, deployment mode, and enabled components. Refer to the
+[Support Matrix](/reference/support-matrix) for supported versions and limitations.
+
+<a id="start-here-when" />
+
+## Choose Your Workflow
+
+Choose the path that matches your task:
+
+- **Run your first coding agent session with Relay.** Follow the
+  [Claude Code](/getting-started/quick-start/claude-code) or
+  [Codex](/getting-started/quick-start/codex) quick start to install what you need,
+  configure output, run a task, and verify the captured activity.
+- **Enable Relay in your coding agent.** Follow the
+  [persistent setup instructions](/nemo-relay-cli/plugin-installation) so your
+  coding agent loads Relay when it starts normally. Then follow the
+  [Claude Code](/nemo-relay-cli/claude-code) or [Codex](/nemo-relay-cli/codex)
+  guide for settings and behavior specific to that agent.
+- **Set up a managed Relay deployment.** Follow the [Daemon](/daemon/about)
+  documentation for deployment instructions and settings controlled by
+  administrators. Managed deployments can serve one or multiple users.
+
+To install the `nemo-relay` executable, follow
+[Installation](/getting-started/installation/cli).
+
+If you are instrumenting an application or framework directly, use
+[Instrument Applications](/instrument-applications/about) or
+[Integrate into Frameworks](/integrate-into-frameworks/about) instead.
+
+## Agent Harness Support
+
+The NeMo Relay CLI is a supported surface for local coding-agent observability
+and hook-backed security. Optimization remains partial and host-dependent
+because each agent exposes different hooks, provider routes, and execution
+controls.
+
+| Agent | Observability | Security | Optimization | Notes |
+| --- | --- | --- | --- | --- |
+| Claude Code | Yes | Yes | Partial | Pre-tool hook responses are supported. LLM optimization uses gateway-routed traffic; full coverage depends on loaded Claude Code hooks. |
+| Codex | Yes | Yes | Partial | Persistent installation verifies the required Relay-generated hooks. A parent `Stop` or `Interrupt` finalizes the bounded task when no delegated agents remain. |
+
+For minimum agent versions, platform support, and current limitations, refer to
+the [Support Matrix](/reference/support-matrix).
+
+## Guides
+
+Use [Configuration](/nemo-relay-cli/configuration) for file selection,
+precedence, and settings;
+[Provider Connections](/nemo-relay-cli/provider-upstreams) and
+[Provider Authentication](/nemo-relay-cli/authentication) for upstream setup;
+and [Command Reference](/nemo-relay-cli/command-reference) for command syntax.
+
+Use [Gateway and Hook Reference](/nemo-relay-cli/gateway-reference) for routes,
+delivery policies, and lifecycle mapping. Start with
+[Troubleshoot the CLI](/nemo-relay-cli/troubleshooting) when a launch,
+integration, provider request, or exporter does not behave as expected.
+
+Hermes Agent includes NeMo Relay natively and does not use this CLI. No
+separate observability plugin or Relay setup is required. Hermes Agent
+understands NeMo Relay plugin configurations.

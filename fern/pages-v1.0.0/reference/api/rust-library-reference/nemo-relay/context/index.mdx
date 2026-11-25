@@ -1,0 +1,38 @@
+---
+title: "Module context"
+sidebar-title: "context"
+description: "Task, thread, and distributed request context propagation. Opaque scope ownership and propagation across tasks and threads."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Task, thread, and distributed request context propagation. Opaque scope ownership and propagation across tasks and threads.
+
+## Structs
+
+- [PropagationContext](/reference/api/rust-library-reference/nemo-relay/context/struct-propagationcontext): Versioned, transport-neutral causal context for crossing a Relay boundary.
+- [ScopeStackEntry](/reference/api/rust-library-reference/nemo-relay/context/struct-scopestackentry): Identity of one entry in the visible Relay scope stack.
+- [ScopeStackHandle](/reference/api/rust-library-reference/nemo-relay/context/struct-scopestackhandle): A shared scope-stack identity, without access to the runtime's locks or registries.
+- [ScopeStackSnapshot](/reference/api/rust-library-reference/nemo-relay/context/struct-scopestacksnapshot): Owned root-to-top values from one coherent read of a visible scope stack.
+- [ThreadScopeStackBinding](/reference/api/rust-library-reference/nemo-relay/context/struct-threadscopestackbinding): A captured thread binding, including its active managed-event context.
+
+## Functions
+
+- [capture_propagation_context](/reference/api/rust-library-reference/nemo-relay/context/fn-capture-propagation-context): Capture the current causal parent and its Relay root when available.
+- [capture_propagation_context_with_root](/reference/api/rust-library-reference/nemo-relay/context/fn-capture-propagation-context-with-root): Capture the current causal parent and an application-supplied session root. Without an imported W3C parent, the supplied root determines the receiver's trace. An imported W3C parent retains precedence over the Relay root. Passing `None` has the same behavior as [`capture_rootless_propagation_context`](/reference/api/rust-library-reference/nemo-relay/context/fn-capture-rootless-propagation-context).
+- [capture_rootless_propagation_context](/reference/api/rust-library-reference/nemo-relay/context/fn-capture-rootless-propagation-context): Capture the current causal parent without a root UUID.
+- [capture_thread_scope_stack](/reference/api/rust-library-reference/nemo-relay/context/fn-capture-thread-scope-stack): Capture the current thread binding for later restoration.
+- [capture_traceparent](/reference/api/rust-library-reference/nemo-relay/context/fn-capture-traceparent): Capture the current canonical W3C `traceparent` value.
+- [create_scope_stack](/reference/api/rust-library-reference/nemo-relay/context/fn-create-scope-stack): Create an independent stack containing one implicit root scope.
+- [create_scope_stack_from_propagation](/reference/api/rust-library-reference/nemo-relay/context/fn-create-scope-stack-from-propagation): Create an independent stack below a transported causal parent.
+- [current_scope_stack_snapshot](/reference/api/rust-library-reference/nemo-relay/context/fn-current-scope-stack-snapshot): Return detached identities from the calling context's explicitly active stack.
+- [fork_scope_stack](/reference/api/rust-library-reference/nemo-relay/context/fn-fork-scope-stack): Create an independent child stack below the current causal parent.
+- [propagate_scope_to_thread](/reference/api/rust-library-reference/nemo-relay/context/fn-propagate-scope-to-thread): Capture the active stack for propagation to another thread.
+- [restore_thread_scope_stack](/reference/api/rust-library-reference/nemo-relay/context/fn-restore-thread-scope-stack): Restore a captured thread binding and its managed-event context.
+- [set_thread_scope_stack](/reference/api/rust-library-reference/nemo-relay/context/fn-set-thread-scope-stack): Install a stack on the current thread.
+- [snapshot_scope_stack](/reference/api/rust-library-reference/nemo-relay/context/fn-snapshot-scope-stack): Copy a stack into an isolated emission-time snapshot.
+- [with_scope_stack](/reference/api/rust-library-reference/nemo-relay/context/fn-with-scope-stack): Run synchronous work with a stack, restoring the previous binding afterward.
+- [with_task_scope_stack](/reference/api/rust-library-reference/nemo-relay/context/fn-with-task-scope-stack): Run a future with a stack bound across executor thread switches.

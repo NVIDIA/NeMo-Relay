@@ -1,0 +1,72 @@
+---
+title: "Struct Atif Exporter"
+sidebar-title: "AtifExporter"
+description: "Collect lifecycle events using the SDK's scope and normalization services."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct AtifExporter { /* private fields */ }
+```
+
+Collect lifecycle events using the SDK's scope and normalization services.
+
+## Implementations
+
+### `impl AtifExporter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-atifexporter\">AtifExporter</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(session_id: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, agent_info: <a href=\"struct-atifagentinfo\">AtifAgentInfo</a>) -&gt; Self"}} /></pre>
+
+Create a collector bound to the SDK runtime and built-in services.
+
+#### `new_for_trajectory`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new_for_trajectory(\n    session_id: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    trajectory_id: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    agent_info: <a href=\"struct-atifagentinfo\">AtifAgentInfo</a>,\n) -&gt; Self"}} /></pre>
+
+Create a bound collector with an explicit trajectory identifier.
+
+#### `subscriber`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscriber(&amp;self) -&gt; <a href=\"../../middleware/type-eventsubscriberfn\">EventSubscriberFn</a>"}} /></pre>
+
+Return a callback for global or scope-local registration.
+
+#### `export`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn export(&amp;self) -&gt; <a href=\"../../type-result\">Result</a>&lt;<a href=\"struct-atiftrajectory\">AtifTrajectory</a>&gt;"}} /></pre>
+
+Wait for delivery and export the collected trajectory.
+
+#### `try_export`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn try_export(&amp;self) -&gt; <a href=\"../../type-result\">Result</a>&lt;<a href=\"struct-atiftrajectory\">AtifTrajectory</a>&gt;"}} /></pre>
+
+Wait for delivery and export the collected trajectory.
+
+#### `clear`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn clear(&amp;self)"}} /></pre>
+
+Clear collected events while keeping session metadata.
+
+## Trait Implementations
+
+### `impl Clone for AtifExporter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-atifexporter\">AtifExporter</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-atifexporter\">AtifExporter</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

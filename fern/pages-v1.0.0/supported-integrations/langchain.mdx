@@ -1,0 +1,216 @@
+---
+title: "NeMo Relay LangChain Integration"
+sidebar-title: "LangChain Integration Guide"
+description: "Add NeMo Relay observability to LangChain applications."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the `nemo_relay.integrations.langchain` package to add NeMo Relay
+observability to [LangChain](https://www.langchain.com/langchain) agents.
+
+## Setup
+
+Install the LangChain integration extra in your application environment.
+
+<Tabs>
+<Tab title="uv">
+```bash
+uv add "nemo-relay[langchain]"
+```
+</Tab>
+
+<Tab title="pip">
+```bash
+pip install "nemo-relay[langchain]"
+```
+</Tab>
+
+</Tabs>
+
+The example below uses the NVIDIA LangChain provider. Install that provider
+extra too if you want to run the example as written:
+
+<Tabs>
+<Tab title="uv">
+```bash
+uv add "nemo-relay[langchain,langchain-nvidia]"
+```
+</Tab>
+
+<Tab title="pip">
+```bash
+pip install "nemo-relay[langchain,langchain-nvidia]"
+```
+</Tab>
+
+</Tabs>
+
+## Usage Example
+
+```python
+import asyncio
+
+import nemo_relay
+from langchain.agents import create_agent
+from langchain_core.tools import tool
+from nemo_relay.integrations.langchain import NemoRelayCallbackHandler, NemoRelayMiddleware
+
+@tool
+def get_weather(location: str) -> str:
+    """Get the current weather for a location."""
+    return f"The weather in {location} is sunny and 72 degrees."
+
+agent = create_agent(
+    model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    tools=[get_weather],
+    middleware=[NemoRelayMiddleware()],
+    system_prompt="Use tools when they are relevant. Keep the final answer brief.",
+)
+
+input_payload = {
+    "messages": [
+        {
+            "role": "user",
+            "content": "What is the weather in San Francisco?",
+        }
+    ]
+}
+
+with nemo_relay.scope.scope("langchain-request", nemo_relay.ScopeType.Agent):
+    result = asyncio.run(
+        agent.ainvoke(input_payload, config={"callbacks": [NemoRelayCallbackHandler()]})
+    )
+
+final_message = result["messages"][-1]
+print(f"Final response: {final_message.content}")
+```
+
+Managed model calls expose available tools to NeMo Relay request intercepts.
+Function tools have editable descriptions and input schemas. Provider-specific
+definitions travel as opaque JSON values. After an edit, `NemoRelayMiddleware`
+passes a copy of the original LangChain tool or provider-specific definition to
+the model call, where the selected LangChain model adapter prepares it for its
+provider. Tool count, order, and function-tool names must remain unchanged.
+
+Relay uses Pydantic's `TypeAdapter` for structured responses, as LangChain does.
+It uses field names for encoding and decoding, so different input and output
+aliases work together. The `langchain` extra includes Pydantic 2.11 or later.
+It restores objects only when their types match a declared schema. Plain JSON
+values pass through. Other Python objects cause a validation error. Encoding
+and validation errors reach the caller.
+
+When the agent uses `ChatNVIDIA`, NeMo Relay forwards request headers, including
+Dynamo session lineage, as HTTP headers. They are not added to the NIM request
+body. For chat models built on the OpenAI or Anthropic Python SDKs, such as
+`langchain-openai` and `langchain-anthropic`, the headers travel in the
+per-request `extra_headers` model setting, which those SDKs send as HTTP headers.
+NeMo Relay also uses `extra_headers` when your `model_settings` already configure
+it. Other providers, such as `ChatOCIGenAI` from `langchain-oci`, receive no Relay
+headers because their SDKs reject unknown request fields. The model call proceeds
+without them.
+
+## Middleware Ordering
+
+LangChain calls the first middleware wrapper in the list first. This is the
+outer wrapper. Requests pass through the wrappers in list order. Results pass
+back through them in reverse order. These rules apply to `wrap_tool_call`,
+`wrap_model_call`, and their async versions.
+
+To record changes to tool results, place `NemoRelayMiddleware()` before the
+middleware that makes those changes. Relay then records the result after the
+other wrapper returns. Tool events and ATIF observations include the changes.
+This example adds a status line to the weather tool's result:
+
+```python
+from langchain.agents.middleware import AgentMiddleware
+
+class AddStatusMiddleware(AgentMiddleware):
+    def wrap_tool_call(self, request, handler):
+        result = handler(request)
+        return result.model_copy(update={"content": result.content + "\nStatus: complete"})
+
+    async def awrap_tool_call(self, request, handler):
+        result = await handler(request)
+        return result.model_copy(update={"content": result.content + "\nStatus: complete"})
+
+agent = create_agent(
+    model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    tools=[get_weather],
+    middleware=[NemoRelayMiddleware(), AddStatusMiddleware()],
+)
+```
+
+Relay records the result after `AddStatusMiddleware` adds the status line.
+If you reverse the two entries, Relay records the result before that change.
+The model still receives the status line in either case.
+
+This example uses a `ToolMessage` with string content. If your tool returns a
+`Command` or content blocks, keep that structure when you change the result.
+
+Choose the order based on what you want to record. An outer Relay wrapper
+records one call around retries in inner middleware. It also records results
+that inner middleware returns from a cache or without calling the tool.
+An inner Relay wrapper records only calls that reach it.
+
+For model calls, an outer Relay wrapper records the request before inner
+wrappers change it. It records the response after those wrappers return.
+Changes to graph state after the Relay wrapper returns are outside the
+recorded call.
+
+`NemoRelayCallbackHandler` creates scopes for the agent run. It does not change
+the middleware order. Use the middleware to route model and tool calls through
+Relay.
+
+For agents that run in LangGraph, use the same middleware order. Refer to
+[Served LangChain Agents](/supported-integrations/langgraph#served-langchain-agents)
+for callback setup. For Deep Agents, use the
+[middleware position option](/supported-integrations/deepagents#middleware-ordering).
+
+## Human Approval in Tools
+
+`NemoRelayMiddleware` supports tools that pause for human approval with both
+`invoke` and `ainvoke`. When a tool calls `langgraph.types.interrupt()`, Relay
+closes its tool scope. The agent returns `__interrupt__` with the approval
+request.
+
+Configure the agent with a checkpointer and set `configurable.thread_id` to
+identify the conversation. To resume the tool, invoke the same agent with
+`Command(resume=...)` and the same thread ID.
+
+To record `Graph Interrupt` and `Graph Resume` marks, install the LangGraph
+callbacks with `nemo_relay.integrations.langgraph.configure_graph(agent)` before
+you run or serve the agent. Refer to the
+[LangGraph integration guide](/supported-integrations/langgraph) for callback
+configuration.
+
+## Verify the Integration
+
+The integration works correctly when:
+
+- The agent run completes and prints a final response.
+- The `langchain-request` scope contains the managed model call.
+- Tool activity appears under the same request when the agent decides to use `get_weather`.
+
+## Observability
+
+Relay chooses the LangChain result codec for managed tool calls. No extra
+codec setup is needed. The codec writes display text or content parts to
+`content`. It sets `is_error` from the returned `ToolMessage.status`.
+Refer to
+[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results)
+for the JSON format.
+
+For a LangGraph `Command`, the codec uses the `ToolMessage` whose `tool_call_id`
+matches the tool call. It keeps other messages and graph state in the returned
+command. If no message matches, it records `content: null`.
+
+ATIF uses supported text and image content for observations. If a tool returns
+a `ToolMessage` with `status="error"`, ATIF adds `extra.is_error: true`. Relay
+also sets the tool span status to `ERROR`. It still returns the message to
+LangChain, so the framework can handle the failure as usual. Deep Agents uses
+the same middleware and codec.
+
+Refer to [Observability](/configure-plugins/observability/about) for details on exporting NeMo Relay observability data to third-party systems.

@@ -1,0 +1,82 @@
+---
+title: "Overview"
+description: "Start with one managed tool or LLM call, verify its events, and add further instrumentation as needed."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use this section when your application can pass an existing tool function or
+model-provider function to NeMo Relay. Start with one Execute call and verify its
+result and lifecycle events before adding more instrumentation.
+
+## Instrument Your Application
+
+Choose the call you own:
+
+<CardGroup cols={2}>
+<Card title="Instrument a Tool Call" href="/instrument-applications/instrument-tool-call">
+Wrap a function such as search or retrieval and verify its result and events.
+</Card>
+<Card title="Instrument an LLM Call" href="/instrument-applications/instrument-llm-call">
+Wrap a model-provider invocation and verify its response and events.
+</Card>
+</CardGroup>
+
+Each guide includes the basic scope setup, a complete example for Python,
+Node.js, and Rust, and instructions to verify the result and emitted events.
+The scope groups the call under one agent run or request.
+
+A **subscriber** is a function you register to receive Relay events. The examples
+use a temporary subscriber to print events while you verify the call.
+
+An **Execute API** accepts the tool or model-provider function you want Relay to
+run. It applies registered middleware and manages the call's start and end events
+under the active scope. These APIs are also called execution wrappers.
+
+Managed tool calls return `ToolExecutionResult`. Its `result` field contains the
+tool's output, and its optional `annotation` field carries additional application
+metadata.
+
+Use explicit start/end APIs only when another library performs the invocation
+internally and exposes only start and finish notifications. Refer to
+[Invocation API Selection](/instrument-applications/code-examples#invocation-api-selection)
+for that fallback and its limitations.
+
+## Start Here When
+
+Use this guide when you need to:
+
+- Trace nested agent work across tools and model calls
+- Redact or normalize event payloads before export
+- Block unsafe or invalid calls before execution
+- Wrap calls with timing, routing, retries, or fallback behavior
+- Isolate request-specific middleware and subscribers
+
+If the tool or LLM boundary is owned by a framework, use [Integrate into Frameworks](/integrate-into-frameworks/about) instead.
+If Relay should manage process-wide plugin behavior, such as an exporter or
+policy component, use [Initialize](/configure-plugins/initialize-plugins).
+
+## Guides
+
+Continue from the first working call with the guide that matches your next task:
+
+- [Instrument a Tool Call](/instrument-applications/instrument-tool-call) shows
+  the complete tool pattern and result verification.
+- [Instrument an LLM Call](/instrument-applications/instrument-llm-call) shows
+  the complete provider pattern and result verification.
+- [Adding Scopes and Marks](/instrument-applications/adding-scopes-and-marks)
+  expands grouping and adds optional checkpoints.
+- [Add Middleware](/instrument-applications/advanced-guide) adds policy or
+  transformation to a working Execute call.
+- [Code Examples](/instrument-applications/code-examples) covers execution API
+  selection, streaming, manual lifecycle fallbacks, and advanced helpers.
+- [Initialize](/configure-plugins/initialize-plugins) explains how to configure,
+  validate, activate, and close process-wide plugins.
+
+After the call returns the expected result and emits events, add one middleware
+behavior at a time.
+
+For production usage, keep tool names stable, keep payloads JSON-compatible, use
+sanitize guardrails for sensitive fields, and prefer scope-local middleware when
+behavior should apply to one request, tenant, or experiment.

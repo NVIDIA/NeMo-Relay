@@ -1,0 +1,408 @@
+---
+title: "Resource Metrics"
+description: "Configure collection, read snapshots, and check platform support."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+# Resource Metrics
+
+The built-in `resource_metrics` plugin collects central processing unit (CPU),
+memory, process, disk, network, and graphics processing unit (GPU) data. It can
+collect on a timer and emit metric marks. A mark is an event that subscribers
+can record. Your program can also call `collect()` for a fresh snapshot. A
+snapshot is a set of readings taken at one time.
+
+The plugin is configured through the standard plugin host. Use the same
+`resource_metrics` component in `plugins.toml` or in a plugin configuration
+object. For setup and activation details, refer to
+[Initialize](/configure-plugins/initialize-plugins).
+
+## Enable the Component
+
+This example enables every category and starts polling every 5 seconds:
+
+```toml
+version = 1
+
+[[components]]
+kind = "resource_metrics"
+enabled = true
+
+[components.config]
+measurement_scope = "runtime_default"
+
+[components.config.polling]
+enabled = true
+interval_millis = 5000
+
+[components.config.cpu]
+enabled = true
+
+[components.config.memory]
+enabled = true
+
+[components.config.process]
+enabled = true
+
+[components.config.disk]
+enabled = true
+process_io = true
+filesystem_paths = ["/"]
+
+[components.config.gpu]
+enabled = true
+devices = []
+device_metrics = true
+process_metrics = true
+
+[components.config.network]
+enabled = true
+interfaces = []
+```
+
+Replace `/` with an absolute path on your system, or use `[]` when you do not
+need filesystem capacity data. The example uses the default values for most
+fields; showing them makes each option clear.
+
+The component and polling have separate switches:
+
+- `components[].enabled` activates the plugin.
+- `components.config.polling.enabled` starts or stops periodic collection.
+- `components.config.polling.interval_millis` sets the delay between polls.
+
+Polling is disabled by default. Its default interval is 5,000 milliseconds.
+The interval must be greater than zero even when polling is disabled. Each
+category is enabled by default. A disabled category is `null` in the snapshot.
+For a ready collection target, the first poll starts when the component
+activates. Later polls wait for the configured interval.
+
+Each poll reads current values and running totals. Some values, such as total
+system memory, can stay the same across many polls. Relay still includes them
+so each snapshot stands on its own. Relay also checks for devices and
+processes on each poll. Global scope can query many processes, so collection
+can take longer. Increase the interval or turn off process input/output (I/O)
+and GPU process metrics if you do not need them.
+
+Relay keeps the Linux process clock rate and its NVIDIA Management Library
+(NVML) connection between polls. If NVML is unavailable, Relay tries to find
+it again after one minute. Relay checks capacity, limits, and device lists on
+each poll so it can detect changes.
+
+On macOS, GPU sampling runs the system `ioreg` utility to read driver
+diagnostics. Disable the GPU category or its process group if you do not need
+those readings.
+
+You can activate the component with polling disabled and call the on-demand
+collection API. On-demand collection does not require polling to be enabled.
+
+## Configuration Fields
+
+All fields use `snake_case` in plugin configuration. Missing fields use the
+defaults below. Unknown fields and invalid values are rejected during
+validation.
+
+### Measurement Scope
+
+`measurement_scope` defaults to `runtime_default`. A scope is the process or
+system resources included in a reading. This setting chooses that scope.
+
+The default depends on where the plugin runs. The CLI uses `global` to measure
+system resources visible to Relay. Embedded Rust, Python, and Node.js APIs use
+`process_tree`, rooted at the current process ID.
+
+Set `global`, `application_process`, or `process_tree` to choose a scope. When
+you choose `process_tree`, the CLI measures its launched agent and children.
+Embedded APIs measure the tree rooted at their current process.
+
+### Polling
+
+These fields control when the plugin collects a snapshot:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Collect and emit a mark on each poll. |
+| `interval_millis` | `5000` | Milliseconds between polls. Must be greater than zero. |
+
+### Categories
+
+These fields control which measurements each snapshot includes:
+
+| Section | Field | Default | Meaning |
+| --- | --- | --- | --- |
+| `cpu` | `enabled` | `true` | Include CPU data. |
+| `memory` | `enabled` | `true` | Include memory data. |
+| `process` | `enabled` | `true` | Include process and thread data. |
+| `disk` | `enabled` | `true` | Include process I/O and configured filesystem data. |
+| `disk` | `process_io` | `true` | Collect read/write counters for selected processes. |
+| `disk` | `filesystem_paths` | `[]` | Absolute paths. Empty means no capacity data. |
+| `gpu` | `enabled` | `true` | Include GPU data. |
+| `gpu` | `devices` | `[]` | IDs or indexes. Empty selects supported devices. |
+| `gpu` | `device_metrics` | `true` | Collect device-wide GPU data. |
+| `gpu` | `process_metrics` | `true` | Collect GPU data for processes in the scope. |
+| `network` | `enabled` | `true` | Include system interface traffic. |
+| `network` | `interfaces` | `[]` | Interface names. Empty selects all visible interfaces. |
+
+Every path in `filesystem_paths` must be absolute and non-empty. GPU selectors
+and network interface names must not be blank. A device index is matched as a
+decimal string, such as `"0"`; not every backend provides an index. Device
+identifiers come from the GPU backend and can differ between systems.
+
+Linux AMD and Intel Direct Rendering Manager (DRM) devices do not report an
+index through this collector. Select them by identifier. macOS registry
+identifiers can change after a restart. Read a current snapshot before you
+set a fixed selector.
+
+Turning off `disk.enabled` disables both disk subgroups. Turning off
+`process_io` keeps filesystem capacity data active. Turning off either GPU
+measurement group does not turn off the other group. Network readings are
+system-wide in every collection mode. They do not measure an agent process.
+
+## Snapshot Shape
+
+Refer to [Snapshot Shape](/reference/api/resource-metrics#snapshot-shape).
+
+## CPU Category
+
+Refer to [CPU Category](/reference/api/resource-metrics#cpu-category).
+
+## Memory Category
+
+Refer to [Memory Category](/reference/api/resource-metrics#memory-category).
+
+## Process Category
+
+Refer to [Process Category](/reference/api/resource-metrics#process-category).
+
+## Disk Category
+
+Refer to [Disk Category](/reference/api/resource-metrics#disk-category).
+
+## Network Category
+
+Refer to [Network Category](/reference/api/resource-metrics#network-category).
+
+## GPU Category
+
+Refer to [GPU Category](/reference/api/resource-metrics#gpu-category).
+
+## Configure Units
+
+Every available measurement contains a `value` and a `unit`. Relay collects in
+consistent base units, then applies your chosen output units. Missing unit
+settings keep the defaults. Unit names use `snake_case` in every API.
+
+For typed unit APIs, conversions, and numeric representation, refer to
+[Configure Units](/reference/api/resource-metrics#configure-units).
+
+This example sets different units for individual measurements:
+
+```toml
+[components.config.units.cpu]
+user_time = "seconds"
+consumption_rate = "millicores"
+
+[components.config.units.memory]
+resident = "gibibytes"
+
+[components.config.units.disk]
+read_data = "megabytes"
+read_throughput = "megabits_per_second"
+filesystem_available_capacity = "gibibytes"
+
+[components.config.units.gpu]
+device_memory_used = "gibibytes"
+device_compute_utilization = "fraction"
+
+[components.config.units.network.system]
+received_data = "gigabytes"
+receive_throughput = "megabits_per_second"
+
+[components.config.units.network.interface]
+received_data = "mebibytes"
+```
+
+The following table lists the allowed units for each measurement family:
+
+| Measurements | Allowed units | Default |
+| --- | --- | --- |
+| CPU and pressure time | `microseconds`, `milliseconds`, `seconds`, `minutes` | `milliseconds` |
+| Memory and GPU memory | `bytes`, `kilobytes`, `megabytes`, `gigabytes`, `terabytes`, `kibibytes`, `mebibytes`, `gibibytes`, `tebibytes` | `kibibytes` |
+| Filesystem capacity | The same storage units | `bytes` |
+| Disk and network data | The same storage units | `bytes` |
+| Disk and network throughput | `bytes_per_second`, `kibibytes_per_second`, `mebibytes_per_second`, `gibibytes_per_second`, `bits_per_second`, `megabits_per_second`, `gigabits_per_second` | `bytes_per_second` |
+| CPU use and capacity | `logical_processors`, `millicores` | `logical_processors` |
+| GPU compute use | `percentage`, `fraction` | `percentage` |
+
+A unit choice for one field applies to every record of that kind, such as
+every filesystem or GPU device. System and interface network readings have
+separate choices. Counts, including packets, errors, processes, and disk
+operations, keep their named units.
+
+If you change a unit after an OpenTelemetry metrics exporter has received that
+metric, restart the exporter before collecting again. The exporter keeps the
+first unit registered for each metric name.
+
+## Platform and Collection-Mode Compatibility
+
+Refer to [Platform and Collection-Mode Compatibility](/reference/api/resource-metrics#platform-and-collection-mode-compatibility).
+
+### GPU Vendor Support in Every Collection Mode
+
+Refer to [GPU Vendor Support in Every Collection Mode](/reference/api/resource-metrics#gpu-vendor-support-in-every-collection-mode).
+
+### Limits That Apply to Every Mode
+
+Refer to [Limits That Apply to Every Mode](/reference/api/resource-metrics#limits-that-apply-to-every-mode).
+
+## Polling Marks and Scope Behavior
+
+When the component and polling are enabled, each poll collects one snapshot and
+emits a `nemo.relay.resource_metrics` mark. The CLI pauses process-tree polls
+until it has a launched process to measure. The mark uses Relay's reserved
+`nemo.relay.metric_measurements` schema. An enabled Agent Trajectory
+Observability Format (ATOF) subscriber writes the mark through the usual event
+path. An enabled OpenTelemetry metrics pipeline exports available measurements
+as metrics. Refer to
+[ATOF](/configure-plugins/observability/atof)
+and [OpenTelemetry](/configure-plugins/observability/opentelemetry) for exporter
+configuration.
+
+Each mark includes `nemo.relay.resource.sample_count` with value `1` and unit
+`events`. This records the poll even when the selected categories have no
+available measurements on the host.
+
+The same selected-scope sample is copied under each active explicit `Agent`
+scope. A custom scope does not receive a copy. If there are no active Agent
+scopes, Relay emits one mark under the runtime root. Copies have the same
+measurements and timestamp. They help each trace see the sample; they do not
+represent separate per-agent resource use and must not be added together.
+
+Agent scope start and end events only update the list of active scopes. They do
+not trigger an extra sample. Each copy goes through the target scope's
+subscriber and sanitizer settings.
+
+The CLI uses global scope by default. Embedded applications use the process tree
+rooted at the current process ID by default. This can include child processes
+that the host application started for other work. In the CLI, explicitly
+selecting `process_tree` measures the launched agent process and its active
+descendants. The runtime chooses the process ID; plugin configuration does not.
+
+## Collect One Snapshot
+
+Activate the `resource_metrics` component before collecting. Polling can stay
+disabled, and on-demand collection does not emit a polling mark. Await the
+result; the first sample has no `consumption_rate`. Rust requires a Tokio
+runtime, and Python requires an active async event loop.
+
+After a Unix `fork`, start a new executable and activate the component there.
+Cancelling the wait does not stop an in-flight query or its baseline update.
+For the full execution and return-value contract, refer to
+[Collect One Snapshot](/reference/api/resource-metrics#collect-one-snapshot).
+
+Each example activates the plugin, collects one snapshot, and closes the
+activation. Polling stays disabled by default. Choose your language:
+
+<Tabs>
+<Tab title="Rust" language="rust">
+
+Add these dependencies to your project's `Cargo.toml`:
+
+```toml
+[dependencies]
+nemo-relay = "1.0.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+Save the following code as `src/main.rs`, then run `cargo run`:
+
+<Code src="_code/rust/resource_metrics.rs" language="rust" maxLines={0} />
+
+</Tab>
+
+<Tab title="Python" language="python">
+
+```python
+import asyncio
+
+from nemo_relay import plugin, resource_metrics
+
+async def main() -> None:
+    config = plugin.PluginConfig(
+        components=[plugin.ComponentSpec(kind="resource_metrics")]
+    )
+    async with plugin.activate(config):
+        snapshot = await resource_metrics.collect()
+        print(snapshot)
+
+asyncio.run(main())
+```
+
+</Tab>
+
+<Tab title="Node.js" language="node">
+
+Install `nemo-relay-node` with npm. Save this example as `collect-metrics.cjs`
+and run `node collect-metrics.cjs`:
+
+```js
+const { collectResourceMetrics } = require("nemo-relay-node");
+const plugin = require("nemo-relay-node/plugin");
+
+async function main() {
+  const activation = await plugin.initialize({
+    version: 1,
+    components: [{ kind: "resource_metrics", enabled: true }],
+  });
+
+  try {
+    const snapshot = await collectResourceMetrics();
+    console.dir(snapshot, { depth: null });
+  } finally {
+    await activation.close();
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+
+</Tab>
+</Tabs>
+
+**Expected outcome:** Collection returns a snapshot with a collection timestamp
+and category fields. Measurements vary by operating system, permissions, and
+available drivers. Unavailable measurements remain unavailable (`None` in
+Python, `null` in Node.js, and `None` in Rust). The first CPU consumption-rate
+reading is unavailable.
+
+For binding-specific timestamps and large integer values, refer to
+[Collect One Snapshot](/reference/api/resource-metrics#collect-one-snapshot).
+
+For plugin configuration files, precedence, and CLI editing, refer to
+[Configure](/configure-plugins/plugin-configuration-files).
+
+## Diagnostic Memory Context
+
+Successful resource collections can retain one memory-only sample for
+[diagnostic memory inspection](/reference/diagnostics/memory#detailed-memory-inspection).
+In the existing component configuration, set `memory_inspection.enabled`
+(default `true`) and `memory_inspection.stale_after_millis` (default `30000`, which
+must be positive). This policy does not enable the component,
+polling, or diagnostic collection. Reading the sample does not schedule collection
+or reload configuration. Disabling the memory category also disables this sample.
+
+For example, extend an existing resource component definition:
+
+<Code src="_code/diagnostics/resource_metrics.toml" language="toml" title="Resource metrics configuration" lines="4-12" showLineNumbers={false} />
+
+The sample preserves target and sample identity, process coverage, units, and
+numeric precision. Runtime or target changes invalidate it. Storage supports a
+fixed set of memory fields and eight limit-event slots. If metadata exceeds those
+limits, the status reports unavailable capacity and keeps a valid older sample.
+
+Diagnostic pages and restricted component identities never enter resource marks
+or exporter events. The existing resource API and its serialization stay the same.

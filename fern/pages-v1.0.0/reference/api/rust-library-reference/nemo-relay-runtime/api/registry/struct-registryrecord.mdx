@@ -1,0 +1,68 @@
+---
+title: "Struct Registry Record"
+sidebar-title: "RegistryRecord"
+description: "A priority-ordered registration record."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct RegistryRecord&lt;T&gt; &#123;\n    pub name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    pub payload: T,\n&#125;"}} /></pre>
+
+A priority-ordered registration record.
+
+Registry records carry the common entry metadata used by all middleware registries plus the caller-provided payload.
+
+## Fields
+
+### `name: String`
+
+Unique middleware name within its registry.
+
+### `priority: i32`
+
+Lower values run earlier in the chain.
+
+### `payload: T`
+
+The caller-provided registry payload.
+
+## Implementations
+
+### `impl<T> RegistryRecord<T>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T&gt; <a href=\"struct-registryrecord\">RegistryRecord</a>&lt;T&gt;"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(name: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, payload: T) -&gt; Self"}} /></pre>
+
+Create a new priority-ordered registry record.
+
+## Trait Implementations
+
+### `impl<T: Clone> Clone for RegistryRecord<T>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T: <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a>&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-registryrecord\">RegistryRecord</a>&lt;T&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-registryrecord\">RegistryRecord</a>&lt;T&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl<T> RegistryEntry for RegistryRecord<T>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T&gt; <a href=\"../../registry/trait-registryentry\">RegistryEntry</a> for <a href=\"struct-registryrecord\">RegistryRecord</a>&lt;T&gt;"}} /></pre>
+
+#### `name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../registry/trait-registryentry\">name</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `priority`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../registry/trait-registryentry\">priority</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>"}} /></pre>

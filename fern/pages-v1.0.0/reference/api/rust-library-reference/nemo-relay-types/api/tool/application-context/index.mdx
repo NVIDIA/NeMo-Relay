@@ -1,0 +1,31 @@
+---
+title: "Module application_context"
+sidebar-title: "application_context"
+slug: "/reference/api/rust-library-reference/nemo-relay-types/api/tool/application_context"
+description: "Structured application context and its shared JSON Schema. Concrete Relay execution context with a separate application-owned data map."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Structured application context and its shared JSON Schema. Concrete Relay execution context with a separate application-owned data map.
+
+JSON Schema validation establishes structure, never approval authenticity. Middleware owns application-data schemas and trust decisions. Application keys cannot collide with future fields of the outer Relay-owned context.
+
+## Structs
+
+- [ApplicationExecutionContext](/reference/api/rust-library-reference/nemo-relay-types/api/tool/application_context/struct-applicationexecutioncontext): Concrete invocation-local context owned by Relay.
+
+## Enums
+
+- [ApplicationExecutionContextError](/reference/api/rust-library-reference/nemo-relay-types/api/tool/application_context/enum-applicationexecutioncontexterror): A non-sensitive structural refusal; input values are never included.
+
+## Constants
+
+- [APPLICATION_EXECUTION_CONTEXT_SCHEMA](/reference/api/rust-library-reference/nemo-relay-types/api/tool/application_context/constant-application-execution-context-schema): Canonical Draft 2020-12 schema shared by managed execution and worker decoding.
+
+## Functions
+
+- [preflight_context_json](/reference/api/rust-library-reference/nemo-relay-types/api/tool/application_context/fn-preflight-context-json): Check JSON byte and depth lower bounds before decoding application context.

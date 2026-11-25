@@ -1,0 +1,128 @@
+---
+title: "Struct Sorted Registry"
+sidebar-title: "SortedRegistry"
+description: "A named registry that maintains a sorted order by priority."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct SortedRegistry&lt;T: <a href=\"trait-registryentry\">RegistryEntry</a>&gt; &#123; /* private fields */ &#125;"}} /></pre>
+
+A named registry that maintains a sorted order by priority.
+
+Items are stored by their embedded [`RegistryEntry::name`](/reference/api/rust-library-reference/nemo-relay-runtime/registry/trait-registryentry) value and sorted by [`RegistryEntry::priority`](/reference/api/rust-library-reference/nemo-relay-runtime/registry/trait-registryentry). The sort is performed eagerly: every [`register`](/reference/api/rust-library-reference/nemo-relay-runtime/registry/struct-sortedregistry) or [`deregister`](/reference/api/rust-library-reference/nemo-relay-runtime/registry/struct-sortedregistry) call re-sorts immediately, so [`sorted_values`](/reference/api/rust-library-reference/nemo-relay-runtime/registry/struct-sortedregistry) is a read-only lookup.
+
+Clones share immutable storage. A successful mutation copies shared storage, leaving snapshots unchanged; failed mutations keep sharing the original storage.
+
+## Priority ordering
+
+Entries are sorted in **ascending** priority order (lower numbers run first). This means a guardrail with priority `1` executes before one with priority `10`.
+
+## Uniqueness
+
+Names must be unique within a registry. Attempting to [`register`](/reference/api/rust-library-reference/nemo-relay-runtime/registry/struct-sortedregistry) a duplicate name returns an error. Use [`deregister`](/reference/api/rust-library-reference/nemo-relay-runtime/registry/struct-sortedregistry) first to remove an existing entry before re-registering.
+
+## Implementations
+
+### `impl<T: RegistryEntry> SortedRegistry<T>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T: <a href=\"trait-registryentry\">RegistryEntry</a>&gt; <a href=\"struct-sortedregistry\">SortedRegistry</a>&lt;T&gt;"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Create a new empty registry.
+
+##### Returns
+
+A new empty [`SortedRegistry`](/reference/api/rust-library-reference/nemo-relay-runtime/registry/struct-sortedregistry) with no entries.
+
+#### `register`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register(&amp;mut self, entry: T) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;where\n    T: <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a>,"}} /></pre>
+
+Register a new entry under its embedded name.
+
+##### Parameters
+
+- `entry`: Value to store in the registry.
+
+##### Returns
+
+`Ok(())` when the entry was inserted.
+
+##### Errors
+
+Returns `Err(String)` when `name` is already present in the registry.
+
+##### Notes
+
+Successful registration eagerly re-sorts the cached priority order.
+
+#### `deregister`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister(&amp;mut self, name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>where\n    T: <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a>,"}} /></pre>
+
+Deregister an entry by name.
+
+##### Parameters
+
+- `name`: Name of the entry to remove.
+
+##### Returns
+
+`true` when an entry was removed and `false` when `name` was not present.
+
+##### Notes
+
+Successful removal eagerly re-sorts the cached priority order.
+
+#### `sorted_values`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn sorted_values(&amp;self) -&gt; impl <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/iterator/trait.Iterator.html\">Iterator</a>&lt;Item = <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;T</a>&gt;"}} /></pre>
+
+Return entries sorted by priority (ascending).
+
+This is a read-only operation - the sort order is maintained eagerly on every [`register`](/reference/api/rust-library-reference/nemo-relay-runtime/registry/struct-sortedregistry) / [`deregister`](/reference/api/rust-library-reference/nemo-relay-runtime/registry/struct-sortedregistry) call.
+
+##### Returns
+
+Shared references ordered from lowest priority to highest priority, without allocating an intermediate collection.
+
+#### `is_empty`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_empty(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Whether this registry contains no entries, without scanning retained storage.
+
+#### `values`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn values(&amp;self) -&gt; impl <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/iterator/trait.Iterator.html\">Iterator</a>&lt;Item = <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;T</a>&gt;"}} /></pre>
+
+Return every entry without imposing priority order.
+
+## Trait Implementations
+
+### `impl<T: Clone + RegistryEntry> Clone for SortedRegistry<T>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T: <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> + <a href=\"trait-registryentry\">RegistryEntry</a>&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-sortedregistry\">SortedRegistry</a>&lt;T&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-sortedregistry\">SortedRegistry</a>&lt;T&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl<T: RegistryEntry> Default for SortedRegistry<T>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T: <a href=\"trait-registryentry\">RegistryEntry</a>&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-sortedregistry\">SortedRegistry</a>&lt;T&gt;"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>

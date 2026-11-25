@@ -1,0 +1,41 @@
+---
+title: "Module config"
+sidebar-title: "config"
+description: "Collection settings and measurement units."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Collection settings and measurement units.
+
+## Structs
+
+- [ResourceMemoryInspectionConfig](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcememoryinspectionconfig): Read-only latest memory projection. Does not enable polling or collection.
+- [ResourceMetricsConfig](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsconfig): Configuration for the built-in `resource_metrics` plugin component.
+- [ResourceMetricsCpuConfig](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricscpuconfig): CPU observations, limits, and pressure.
+- [ResourceMetricsCpuUnits](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricscpuunits): CPU measurement unit choices.
+- [ResourceMetricsDiskConfig](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsdiskconfig): Disk I/O for the selected process scope and filesystem capacity.
+- [ResourceMetricsDiskUnits](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsdiskunits): Disk measurement unit choices.
+- [ResourceMetricsGpuConfig](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsgpuconfig): Accelerator observations.
+- [ResourceMetricsGpuUnits](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsgpuunits): GPU measurement unit choices.
+- [ResourceMetricsMemoryConfig](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsmemoryconfig): Memory observations, limits, pressure, and OOM events.
+- [ResourceMetricsMemoryUnits](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsmemoryunits): Memory measurement unit choices.
+- [ResourceMetricsNetworkConfig](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsnetworkconfig): System interface counters. Empty `interfaces` selects every visible interface.
+- [ResourceMetricsNetworkTrafficUnits](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsnetworktrafficunits): Unit choices for one group of network traffic.
+- [ResourceMetricsNetworkUnits](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsnetworkunits): Unit choices for system and interface traffic.
+- [ResourceMetricsPollingConfig](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricspollingconfig): Periodic collection controlled by the `resource_metrics` plugin component.
+- [ResourceMetricsProcessConfig](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsprocessconfig): Process, thread, handle, descriptor, and process-limit observations.
+- [ResourceMetricsUnits](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/struct-resourcemetricsunits): Output unit choices for resource metrics.
+
+## Enums
+
+- [BandwidthUnit](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/enum-bandwidthunit): Units for data transferred per second.
+- [CapacityUnit](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/enum-capacityunit): Units for memory and filesystem capacity.
+- [CpuUnit](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/enum-cpuunit): Units for CPU consumption and effective capacity.
+- [DataUnit](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/enum-dataunit): Units for cumulative transferred data.
+- [DurationUnit](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/enum-durationunit): Units for elapsed and cumulative durations.
+- [ResourceMetricsMeasurementScope](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/enum-resourcemetricsmeasurementscope): Measurement boundary selected for resource metric collection.
+- [UtilizationUnit](/reference/api/rust-library-reference/nemo-relay-resource-metrics/config/enum-utilizationunit): Units for GPU compute utilization.

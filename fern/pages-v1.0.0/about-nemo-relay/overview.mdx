@@ -1,0 +1,135 @@
+---
+title: "NVIDIA NeMo Relay Overview"
+sidebar-title: "Overview"
+description: "Observe and control agent runs with NeMo Relay's runtime, plugins, integrations, CLI, observability, and deployment options."
+template-library-version: "1.0.0"
+position: 1
+---
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+NVIDIA NeMo Relay helps you observe and control what happens inside agent runs
+without rewriting the agent stack you already have. It gives coding agents,
+applications, framework integrations, middleware, and observability backends a
+shared runtime for scopes, policy, plugins, and lifecycle events.
+
+**How Relay Connects to Your Stack**
+
+{/* Keep the four stages on one line; narrow screens can scroll without shrinking the labels. */}
+<div role="region" aria-label="Relay stack flow; scroll horizontally on narrow screens" tabIndex={0} style={{ overflowX: "auto", margin: "1.5rem 0" }}>
+  <svg role="img" aria-labelledby="relay-stack-title relay-stack-description" viewBox="0 0 720 120" style={{ display: "block", width: "100%", minWidth: "640px", height: "auto", color: "var(--fern-text-primary, currentColor)" }}>
+    <title id="relay-stack-title">How Relay connects to your stack</title>
+    <desc id="relay-stack-description">An agent or application connects to the NeMo Relay runtime, then subscribers and exporters produce observability files and backend output.</desc>
+    <g fill="none" stroke="currentColor" strokeOpacity="0.2">
+      <rect x="1" y="1" width="159" height="118" rx="12" />
+      <rect x="374" y="1" width="159" height="118" rx="12" />
+      <rect x="560" y="1" width="159" height="118" rx="12" />
+    </g>
+    <rect x="187" y="1" width="160" height="118" rx="12" fill="#76b900" fillOpacity="0.1" stroke="#76b900" />
+    <g fill="none" stroke="#76b900" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M168 60h11m-4-4 4 4-4 4M355 60h11m-4-4 4 4-4 4M541 60h11m-4-4 4 4-4 4" />
+      <path d="m74 22-7 7 7 7m13-14 7 7-7 7m-4-16-5 18" />
+      <path d="m267 18 15 9-15 9-15-9 15-9Zm-15 17 15 9 15-9" />
+      <path d="M440 22h27m-27 9h27m-27 9h27" />
+      <path d="M628 39V21h24m-18 18V29m7 10V24m7 15v-7" />
+    </g>
+    <g fill="currentColor" fontFamily="inherit" fontWeight="400" textAnchor="middle" fontSize="13">
+      <text x="80" y="84">Agent or Application</text>
+      <text x="267" y="74">NeMo Relay</text>
+      <text x="267" y="94">Runtime</text>
+      <text x="454" y="74">Subscribers</text>
+      <text x="454" y="94">and exporters</text>
+      <text x="640" y="74">Observability</text>
+      <text x="640" y="94">Files and backends</text>
+    </g>
+  </svg>
+</div>
+
+Agent systems usually involve several components in one request: an entry point
+starts work, a model is called, tools run, subagents can branch off, and
+observability or policy systems need to understand what happened. Relay gives
+those components one runtime contract instead of asking each layer to invent
+its own wrappers, trace vocabulary, and cleanup rules.
+
+<Note>
+Relay does not replace your agent framework, model provider, application logic,
+observability backend, or guardrail authoring system. For how Relay complements
+other tooling, refer to
+[How NeMo Relay Relates to Other Tooling](/about-nemo-relay/ecosystem#how-nemo-relay-relates-to-other-tooling).
+</Note>
+
+## Skip Ahead
+
+Go directly to setup instructions, supported environments, or reference material.
+
+<CardGroup cols={3}>
+<Card title="Quick Starts" icon="fa-solid fa-book-open" href="/getting-started/quick-start">
+Run a first working example for your coding agent, framework, or language.
+</Card>
+<Card title="Install Overview" icon="fa-solid fa-download" href="/getting-started/installation">
+Choose CLI, framework, harness, or API installation for your environment.
+</Card>
+<Card title="Configure Overview" icon="fa-solid fa-sliders" href="/getting-started/configuration">
+Set up plugin configuration and observability output for your integration.
+</Card>
+<Card title="Support Matrix" icon="fa-solid fa-list-check" href="/reference/support-matrix">
+Check supported platforms, coding agents, frameworks, and language bindings.
+</Card>
+<Card title="Connect to Observability Platforms" icon="fa-solid fa-chart-line" href="/user-guides/connecting-to-observability-platforms">
+Send Relay traces to your observability platform with a step-by-step user guide.
+</Card>
+<Card title="Troubleshooting" icon="fa-solid fa-wrench" href="/resources/troubleshooting/trace-incident-runbook">
+Troubleshoot missing, incomplete, or unexpected observability output.
+</Card>
+</CardGroup>
+
+[Hermes Agent](https://hermes-agent.nousresearch.com/docs/integrations/nemo-relay)
+comes with NeMo Relay installed; no separate Relay installation is required.
+
+## Core Capabilities
+
+Explore the main capabilities Relay provides, then follow the links for details.
+
+<CardGroup cols={3}>
+<Card title="Agent Runtime" icon="fa-solid fa-layer-group" href="/about-nemo-relay/agent-runtime-primer">
+Give agent work a shared execution and lifecycle model through scopes, events,
+marks, and managed calls.
+</Card>
+<Card title="Plugins" icon="fa-solid fa-puzzle-piece" href="/configure-plugins/about">
+Enable reusable observability, guardrail, and adaptive behavior through
+configuration.
+</Card>
+<Card title="Integrations" icon="fa-solid fa-plug" href="/supported-integrations/about">
+Connect existing agent frameworks and harnesses through their supported
+execution and lifecycle boundaries.
+</Card>
+<Card title="Coding Agent CLI" icon="fa-solid fa-terminal" href="/nemo-relay-cli/about">
+Set up and run Relay with supported coding agents, including hooks, provider
+routing, and local session workflows.
+</Card>
+<Card title="Observability" icon="fa-solid fa-chart-line" href="/configure-plugins/observability/about">
+Turn agent activity into event logs, trajectories, and traces for debugging,
+analysis, and evaluation.
+</Card>
+<Card title="Daemon" icon="fa-solid fa-server" href="/getting-started/deploy">
+Run Relay as a managed service on a workstation or remote Linux server, with
+workers on each user's machine.
+</Card>
+</CardGroup>
+
+The agent runtime provides the shared lifecycle model. Integrations and the
+coding agent CLI connect your workloads to it, plugins add configurable
+behavior, and observability captures the resulting activity. The daemon
+supports managed operation across users and machines.
+
+## Build on Relay
+
+Use these paths when you need to extend Relay or contribute to the repository.
+
+- **Build integrations:** Use [Integrate into Frameworks](/integrate-into-frameworks/about)
+  to connect a framework, host, or provider.
+- **Build plugins:** Package reusable exporters, middleware, or policy with
+  [Build Plugins](/build-plugins/about) and [Use Plugins](/configure-plugins/about).
+- **Contribute:** Start with [Development Setup](/contribute/development-setup)
+  and [Testing and Docs](/contribute/testing-and-docs).

@@ -1,0 +1,32 @@
+---
+title: "Module atif"
+sidebar-title: "atif"
+description: "ATIF trajectories and a runtime-bound trajectory collector."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+ATIF trajectories and a runtime-bound trajectory collector.
+
+## Structs
+
+- [AtifAgentInfo](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atifagentinfo): Information about the agent that produced the trajectory.
+- [AtifAncestry](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atifancestry): Lineage node identifying a callable within an ATIF step.
+- [AtifExporter](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atifexporter): Collect lifecycle events using the SDK's scope and normalization services.
+- [AtifFinalMetrics](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atiffinalmetrics): Aggregate statistics for the entire trajectory (ATIF final_metrics).
+- [AtifInvocationInfo](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atifinvocationinfo): Invocation timing and correlation metadata for one execution occurrence.
+- [AtifMetrics](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atifmetrics): Token usage and cost metrics for a single step.
+- [AtifObservation](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atifobservation): Observation results from tool execution.
+- [AtifObservationResult](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atifobservationresult): A single observation result from a tool call.
+- [AtifStep](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atifstep): A single step in an ATIF trajectory.
+- [AtifStepExtra](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atifstepextra): Lineage payload serialized into ATIF `Step.extra`.
+- [AtifSubagentTrajectoryRef](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atifsubagenttrajectoryref): Reference to a delegated subagent trajectory.
+- [AtifToolCall](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atiftoolcall): A tool call made by the agent.
+- [AtifTrajectory](/reference/api/rust-library-reference/nemo-relay/exporter/atif/struct-atiftrajectory): A complete ATIF trajectory.
+
+## Constants
+
+- [ATIF_SCHEMA_VERSION](/reference/api/rust-library-reference/nemo-relay/exporter/atif/constant-atif-schema-version): The ATIF schema version string embedded in all exported trajectories.

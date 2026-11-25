@@ -1,0 +1,657 @@
+---
+title: "Add Middleware"
+description: "Add one policy to a working Execute call, verify its effect, and extend middleware as needed."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+**Middleware adds rules and behavior around tool and LLM calls without changing
+the code that performs the underlying work.** Relay uses it to check or modify
+requests, allow or block execution, add retries or fallbacks, and control what
+data is recorded in events.
+
+## What You Build
+
+You will add middleware to a working Execute call and verify its effect:
+
+- Request intercepts transform the real request before execution.
+- Sanitize guardrails transform only the payload recorded on events.
+- Conditional-execution guardrails can block execution.
+- Execution intercepts wrap the callback and can add timing, retries, routing, or fallback behavior.
+- Application execution context supplies invocation-local information to execution
+  intercepts, such as an existing approval assertion.
+
+## Before You Start
+
+Complete [Instrument a Tool Call](/instrument-applications/instrument-tool-call)
+or [Instrument an LLM Call](/instrument-applications/instrument-llm-call).
+Execute APIs run execution-control middleware around the actual callback. Manual
+start/end APIs apply event-payload sanitizers but do not automatically run request
+or execution intercepts.
+
+## Add One Tool Policy
+
+Start with the working `search` example from
+[Instrument a Tool Call](/instrument-applications/instrument-tool-call).
+Add the function below to the working example, merging its imports with the
+existing imports. Call `register_query_policy()` in Python,
+`registerQueryPolicy()` in Node.js, or `register_query_policy()?` in Rust inside
+`main`, before the Execute call. It rejects an empty query before the tool runs.
+
+<Tabs>
+<Tab title="Python" language="python">
+<Code src="_code/python/query_policy.py" language="python" />
+</Tab>
+
+<Tab title="Node.js" language="node">
+<Code src="_code/nodejs/query-policy.js" language="js" />
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/rust/query_policy.rs" language="rust" />
+</Tab>
+</Tabs>
+
+Run the example with its original query. It should return the same result and
+emit the same lifecycle events. Then change the query to an empty string and run
+it again. The Execute call should fail with `search.query is required` before the
+`search` callback runs. Keep the example's scope closure and subscriber cleanup.
+With this policy, an empty query emits a `search` rejection mark with
+`rejected: true` and `rejection_reason: "search.query is required"`. The callback
+does not run, and no tool start/end events are emitted for the rejected call.
+The enclosing agent scope still closes normally.
+
+With a subscriber that prints event kind and name, the rejected call produces
+these event lines:
+
+```text title="Expected rejection events"
+scope agent-run
+scope search.require_query
+scope search.require_query
+mark search
+scope agent-run
+```
+
+The Execute call also reports `search.query is required`. The `mark search`
+line is the rejection checkpoint; it is not a tool start or end event. The two
+`scope search.require_query` lines record the guardrail's own execution. There
+is no `scope search` start/end pair for the rejected tool call.
+
+Register this process-wide policy once during application setup. Use
+[Scope Middleware to One Request](#scope-middleware-to-one-request) when a policy
+belongs to one request instead.
+
+## Choose the Middleware Type
+
+Use this table to match the behavior you need with the correct middleware family.
+
+| Need | Middleware Type | Changes Real Execution |
+|---|---|---|
+| Redact event payloads | Sanitize-request or sanitize-response guardrail | No |
+| Normalize tool arguments or model requests | Request intercept | Yes |
+| Block unsafe or invalid work | Conditional-execution guardrail | Yes, by rejecting |
+| Add timing, retries, routing, or fallback | Execution intercept | Yes |
+| Wrap streaming model output | LLM stream execution intercept | Yes |
+
+Use the narrowest middleware type that matches the behavior. For example, do not use a request intercept when you only need to hide a secret from exported events.
+
+## Add a Tool Policy
+
+Replace the entire [Add One Tool Policy](#add-one-tool-policy) example with the
+following example. Call `register_tool_policy()` in Python,
+`registerToolPolicy()` in Node.js, or `register_tool_policy()?` in Rust before
+Execute. Keep the tool guide's scope and subscriber cleanup.
+
+This example adds three behaviors around a `search` tool:
+
+- Redact `api_key` from emitted request events.
+- Reject empty queries before execution.
+- Measure execution duration.
+
+<Tabs>
+<Tab title="Python" language="python">
+<Code src="_code/python/tool_policy.py" language="python" />
+</Tab>
+
+<Tab title="Node.js" language="node">
+<Code src="_code/nodejs/tool-policy.js" language="js" />
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/rust/tool_policy.rs" language="rust" />
+</Tab>
+
+</Tabs>
+
+Tool execution intercepts return an outcome even when they only forward the
+canonical result from `next`. A forwarding intercept must preserve both
+`result` and `annotation`; pending marks remain lifecycle-owned. Refer to
+[Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
+for annotation, pending-mark, lifecycle, and binding-specific return semantics.
+
+## Validate the Middleware
+
+To inspect redaction, make these changes to the working tool example:
+
+1. Add an `api_key` argument with the synthetic value `demo-value` to the arguments
+   passed to Execute. In Python, also add `api_key: str` to `SearchArguments`.
+2. Replace the temporary subscriber callback with the matching function below.
+   In Node.js, pass `logEvent` to `registerSubscriber`. In Rust, pass
+   `Arc::new(log_event)` to `register_subscriber`. Keep the existing subscriber
+   name, flush, and cleanup. Use only synthetic data because this subscriber
+   prints complete events.
+
+<Tabs>
+<Tab title="Python" language="python">
+<Code src="_code/python/print_event.py" language="python" />
+</Tab>
+
+<Tab title="Node.js" language="node">
+<Code src="_code/nodejs/print-event.js" language="js" />
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/rust/print_event.rs" language="rust" />
+</Tab>
+</Tabs>
+
+Run the example with the original nonempty query. The call returns the same search
+result as before. Check these fields in the tool start event; other event fields
+are omitted:
+
+```json title="Expected tool start fields"
+{
+  "name": "search",
+  "data": {
+    "query": "runtime instrumentation",
+    "api_key": "<redacted>"
+  }
+}
+```
+
+The allowed call also prints one timing line matching this pattern:
+
+```text title="Expected timing pattern"
+search completed in <duration>
+```
+
+`<duration>` varies between runs. Python and Node.js print a number followed by
+` ms`; Rust uses duration formatting, so the unit can vary.
+
+Then run the example with an empty query. The call fails with
+`search.query is required` before the `search` callback or timing intercept runs.
+No timing line is printed. Refer to [Add One Tool Policy](#add-one-tool-policy)
+for the rejection mark and its meaning.
+
+After checking the payload, restore the subscriber callback that prints only
+event kind and name.
+
+## Application Execution Context
+
+An application can adopt execution middleware incrementally while retaining its
+existing human approval flow. For example, it can supply a reference to a
+completed application review separately from the tool's business arguments. A
+middleware component that understands that review can avoid repeating its own
+review, then call `next` so the remaining middleware and tool callback still run.
+Relay does not interpret the reference or change the approval flow itself.
+
+The application APIs carry the same optional value through each binding. Supply
+it on the managed execute call, then read it from the middleware context:
+
+| Binding | Supply context when executing | Read it in execution middleware |
+| --- | --- | --- |
+| Rust | `ToolCallExecuteParams::builder().execution_context(value)` | `context.execution_context()` |
+| Python | `tools.execute(..., execution_context=value)` | `context.execution_context` |
+| Node.js | `executionContext` in `typedToolExecute` options | `context.executionContext` |
+| Go | `WithApplicationExecutionContext(value)` on `ToolCallExecute` or `tools.Execute` | `context.ExecutionContext` (`*ApplicationExecutionContext`) |
+| C | `execution_context_json` on `nemo_relay_tool_call_execute` | Optional `execution_context` property in the callback's context JSON |
+
+Rust and Python worker SDKs expose the same optional context on their tool
+execution callback. C callers must rebuild against the updated header and pass
+`execution_context_json` immediately before `cancellation` on
+`nemo_relay_tool_call_execute`. Pass `NULL` to omit context. Go rejects the option
+on manual `ToolCall` and `ToolCallEnd`, where execution middleware does not run.
+
+`ApplicationExecutionContext` is a concrete Relay-owned object. Its optional
+`data` field is a JSON object/map for application-defined payloads. The outer
+object has no arbitrary properties: applications put custom keys inside `data`,
+leaving the top level available for future Relay API fields without naming
+collisions.
+
+`execution_context.data` belongs to this separate invocation-context argument.
+It is not the existing tool, scope or event `data`/`metadata` argument. The host
+application supplies it for this one execution; Relay does not automatically
+expose it to the model or record it in lifecycle events.
+
+For example, an application with an existing human-approval workflow could send:
+
+```json
+{
+  "data": {
+    "host_approval": {
+      "version": 1,
+      "source": "example.application",
+      "approval_id": "approval-123",
+      "tool_name": "files.write",
+      "approved_arguments": {"path": "notes.txt", "content": "Hello"}
+    },
+    "com.example.audit": {"request_id": "request-456"}
+  }
+}
+```
+
+Here `host_approval` and its five fields are **an application-specific example**,
+not a built-in Relay approval type or policy. The middleware must validate the
+payload's own schema, trust the calling application, and compare the exact tool
+and arguments before acting on it. Another application can use different keys
+and payload structures inside `data`. Relay does not interpret approval states,
+receipt formats, or extension names there.
+
+Omitting execution context means no context. `{}` is a supplied context without
+application data; `{"data": {}}` explicitly supplies an empty data map. A null,
+array, or scalar `data` value is invalid, as are unknown top-level fields. Values
+inside `data` may be any JSON value. In particular, the validity of a field named
+`host_approval` belongs to the application and its middleware, not Relay's
+transport validator.
+
+These limits bound accepted context values. Node.js property-name enumeration
+can allocate a key list before validation rejects a wide object.
+
+The entire context, including `data`, must serialize to at most **16 KiB** of
+UTF-8 JSON and contain at most **64 nested container levels**. The root object
+counts as level 1, `data` as level 2, and each nested object or array adds one
+level. Limits are checked before JSON Schema traversal. Invalid envelope fields
+fail before middleware or the tool runs. Structural validation does not
+authenticate application claims.
+
+The canonical envelope schema is maintained with the shared Rust types in
+[`application-execution-context.schema.json`](https://github.com/NVIDIA/NeMo-Relay/blob/24886b101854ebc8a7666487eb3cb9a2773b62b0/crates/types/schemas/application-execution-context.schema.json).
+Rust exposes `ApplicationExecutionContext`; other bindings and worker SDKs expose
+the same optional data map using their native typing conventions. The schema
+checks Relay's envelope; applications can apply a separate JSON Schema or their
+own validators to the content of `data`.
+
+Rust callers can construct the checked type with
+`ApplicationExecutionContext::try_from(json_value)?` before passing it to the
+managed execution builder. Admission also revalidates values assembled or
+modified through public Rust fields. Python keeps a dictionary-compatible typed
+envelope with a JSON mapping under `data`. Go offers
+`WithApplicationExecutionContext` for its typed model and retains
+`WithToolExecutionContext` for envelope-validated raw JSON.
+
+This field has a narrower lifetime and audience than event metadata:
+
+- Only execution intercepts receive it. Tool arguments, request intercepts,
+  conditional guardrails, and the final tool callback do not receive it as a
+  separate parameter.
+- Each intercept receives an isolated snapshot. Changes to a binding-local
+  object do not change what another intercept sees. Calling `next` can rewrite
+  business arguments, but cannot replace the execution context.
+- A nested managed tool call has no execution context unless its caller supplies
+  one explicitly. Scope metadata does not populate it automatically.
+- Relay does not automatically copy it to model inputs, lifecycle events, results,
+  annotations, or telemetry. Application and plugin code can still disclose it
+  explicitly, so avoid logging it or adding credentials to it.
+
+Application-supplied does **not** mean verified authorization. Relay does not
+verify a human decision, caller identity, signature, expiry, or operation binding
+inside this object. The application must validate its own approval proof and
+bind it to the exact tool, business arguments, owner and applicable policy before
+supplying a review claim. Do not populate it from a model-generated `approved`
+flag. An intercept must also check that the claim still covers its current
+arguments, because earlier middleware may have rewritten them. A missing claim
+uses that component's normal review path. A supplied claim that is malformed,
+untrusted or mismatched must be rejected rather than downgraded to automated
+review. Neither case implies approval. The application must stop a human-denied
+operation rather than ask middleware to override that denial. If human approval
+is mandatory and the operation changes, the application must reject it or obtain
+fresh approval; a component's automated review does not renew human consent.
+
+The following tested integration sketch accepts application-defined
+`validate_existing_approval`, `approval_covers_call` and
+`perform_component_review` functions as callbacks; Relay does not implement them.
+The verifier and trust matcher are synchronous; the component reviewer is
+asynchronous. Call `register_application_review(...)` once during setup, then use
+`execute_after_application_approval(...)` to execute an approved operation.
+The verifier must raise if the receipt is invalid or no longer covers the call.
+`perform_component_review` must raise to refuse execution; returning `False`
+does not stop this wrapper. In this example, `validate_existing_approval` returns
+an application-defined five-field approval assertion only after verifying the
+receipt. The example's `_approval_has_expected_shape` function checks that
+payload's required fields, numeric version and prohibition of a separate
+`decision` field; these are application choices. `approval_covers_call` then enforces the trusted
+host/source and exact tool/arguments. A supplied claim that fails either check
+is refused without calling normal review. Relay prescribes neither the payload
+schema nor the underlying receipt or signature format.
+
+`perform_component_review` checks the arguments at this middleware stage.
+Later middleware can change them. If policy requires approval of the final
+operation, the application must enforce that policy in the tool implementation,
+including calls without an approval claim.
+
+The wrapper rechecks the receipt at callback entry, before calling
+`implementation`. If the implementation waits before writing or committing an
+effect, the application must recheck approval at that boundary when its policy
+requires continued validity.
+
+<Code src="_code/python/application_execution_context.py" language="python" />
+
+### Transport Compatibility
+
+**Application package requirements**
+
+Use compliant Relay 1.0 components built from the matching package set. For
+Node.js this includes both the JavaScript/TypeScript wrapper and its compiled
+native binding; do not mix them with earlier development snapshots. Execution
+context is part of the required API contract, not an optionally detected feature.
+Use `executionContext` directly in the managed execute options.
+
+The same matching-version requirement applies to Rust, Python, Go and C. Use
+bindings and workers that implement execution-context support. Context must still
+be an object within the size and nesting limits, and supplying it grants no
+authorization.
+
+**Worker-side compatibility checks**
+
+Execution-context support is required by
+`nvidia.nemo.relay.worker.v1@1.0.0`, not an optional SDK capability. Hosts and
+workers check protocol identity and exact contract version before registration.
+Every conforming worker must preserve supplied context, including `{}`. The
+application can still omit context on any call, and callback signatures remain
+unchanged. The handshake establishes the declared protocol contract, not
+permission to execute or proof of application approval.
+
+Rebuild and repackage workers that omit execution context with a matching SDK.
+A worker that advertises `1.0.0` but drops this field does not implement the
+contract; the handshake cannot detect that omission. Separately versioned
+diagnostic contracts are unchanged.
+
+**Native plugin compatibility**
+
+Native plugins use native contract **v1.0**, including optional execution context
+on tool invocations. The SDK exposes the checked envelope through
+`context.execution_context()`. The native contract is separate from the Relay
+package version and worker protocol identity, even though all target 1.0 here.
+
+The host checks the declared native contract and complete ABI schema before
+creating the plugin. A binary built against an incompatible invocation layout is
+rejected. Rebuild it with an SDK compatible with the host.
+See [Native ABI Reference](/build-plugins/native/native-abi-reference#application-execution-context)
+for the transport. Public C callbacks receive an optional `execution_context`
+property in their context JSON. The Go binding decodes that envelope before
+invoking the public callback, which receives a `ToolExecutionContext` struct and
+reads `context.ExecutionContext`.
+
+## Scope Middleware to One Request
+
+Use scope-local middleware when a policy applies only to one request, tenant, experiment, or agent run.
+
+1. Create or receive the active scope handle.
+2. Register middleware with the scope-local helper for that handle.
+3. Execute tools or LLM calls inside that scope.
+4. Let the scope end remove the scope-local registrations automatically.
+
+Use global middleware for process-wide behavior, such as organization-wide redaction. Use scope-local middleware for request-specific policy, such as tenant routing or an A/B test.
+
+## Configure Execution Stages per Call
+
+Each managed tool or LLM call can choose which middleware stages run. You can
+turn conditional-execution guardrails, request intercepts, and execution
+intercepts on or off. All three stages run by default and keep their usual
+order. If you turn off conditional execution, Relay skips those checks for that
+call. Only skip checks when your application no longer needs them for that call.
+
+For example, your framework might apply request intercepts before it calls
+Relay. Turn off that stage to avoid running it twice. Keep the other stages on.
+Use the call from your working tool or LLM example and change only its options.
+
+<Tabs>
+<Tab title="Python" language="python">
+
+Add `execution_options=nemo_relay.ExecutionOptions(request_intercepts=False)`
+to your `nemo_relay.tools.execute` call. Keep the other arguments unchanged.
+Use the same keyword with `nemo_relay.llm.execute`,
+`nemo_relay.llm.stream_execute`, and the typed execute helpers.
+
+You cannot change an `ExecutionOptions` object after you create it. Its fields
+are `conditional_execution`, `request_intercepts`, and `execution_intercepts`.
+Each field defaults to `True`.
+
+</Tab>
+<Tab title="Node.js" language="node">
+
+The native Execute functions accept an execution-options object. Its fields
+are `conditionalExecution`, `requestIntercepts`, and `executionIntercepts`.
+A field that you omit keeps its stage on. Tool execute calls can additionally
+supply application execution context after this parameter.
+
+In the working tool example, add `null` for `toolCallId` after the `metadata`
+argument. Then add `{ requestIntercepts: false }` as the execution-options argument.
+Keep the existing argument positions. Relay copies the options when the call starts.
+
+All three typed execute helpers accept `executionOptions` in their options
+object. For example, add `executionOptions: { requestIntercepts: false }`
+to that object.
+
+</Tab>
+<Tab title="Rust" language="rust">
+
+Import `nemo_relay::ExecutionOptions`. Create a value with `request_intercepts`
+set to `false` and use `..ExecutionOptions::default()` for the other fields.
+Pass this value to `.execution_options(...)` on the execute parameter builder
+before you call `.build()`.
+
+The builders are `ToolCallExecuteParams`, `LlmCallExecuteParams`, and
+`LlmStreamCallExecuteParams`. The option fields are `conditional_execution`,
+`request_intercepts`, and `execution_intercepts`. `Default` turns on all three stages.
+
+</Tab>
+</Tabs>
+
+Run your example again. If your application registers request intercepts,
+confirm those callbacks no longer run for that call. Other stages should keep
+their existing behavior. The application should still receive its result and
+normal start/end events if the
+call is allowed to run. Restore the default options after this check if you
+need request intercepts for later calls.
+
+Options affect only the call that receives them. Nested calls and calls that
+run at the same time use their own options. These controls select whole stages,
+including global and scope-local registrations. They do not change stage order
+or select individual registrations by name. Use
+[Control a Global Registration](#control-a-global-registration) to control a
+specific global registration instead.
+
+Relay still sanitizes event data, uses codecs, passes trace context, and handles
+call completion. With all three stages off, Relay still emits start and end
+events and cleans up streams. For streaming LLM calls, `execution_intercepts`
+controls the streaming execution intercepts. The collector, finalizer, and stream
+close behavior stay active.
+
+Turning off request intercepts does not turn off codec processing or session
+headers. The provider request can therefore differ from the input request.
+These options do not change manual start/end APIs or standalone middleware helpers.
+
+## Control a Global Registration
+
+Use a conditional middleware guardrail when an operational policy must temporarily
+exclude existing global middleware or a subscriber. Discover the target from the active
+runtime, and match its registration kind and effective name. Do not persist or construct
+the effective name.
+
+The gate affects future middleware and event-publication snapshots. It does not change
+an in-flight chain, a queued event, the target's ownership, or a same-named scope-local
+registration. Every matching gate must allow the target. If a gate callback fails, Relay
+fails open and keeps the target eligible.
+
+Choose one of the following lifecycle patterns:
+
+- Register a global gate when application code owns the timer, health check, or
+  operational control. Remove the gate in a guaranteed cleanup path.
+- Register an activation-owned gate when a plugin component owns the control for its
+  complete active lifetime. Relay removes the gate during rollback or teardown.
+
+Gate callbacks must read already-available state. They must not make reentrant Relay
+calls that produce middleware, flush subscribers, wait for exporters, or clear plugins.
+Refer to
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+for the complete semantic model and [Code Examples](/instrument-applications/code-examples)
+for binding-specific registration and cleanup.
+
+## Middleware Registration Families
+
+NeMo Relay exposes the same core middleware families for tools and LLMs:
+
+| Family | Tool Registration | LLM Registration | Changes Real Execution |
+|---|---|---|---|
+| Sanitize request | `register_tool_sanitize_request` | `register_llm_sanitize_request` | No |
+| Sanitize response | `register_tool_sanitize_response` | `register_llm_sanitize_response` | No |
+| Conditional execution | `register_tool_conditional_execution` | `register_llm_conditional_execution` | Yes, by rejecting |
+| Request intercept | `register_tool_request` | `register_llm_request` | Yes |
+| Execution intercept | `register_tool_execution` | `register_llm_execution` | Yes |
+| Stream execution intercept | Not applicable | `register_llm_stream_execution` | Yes |
+
+Sanitize guardrails affect only the payload recorded on emitted events. Tool
+sanitize-response guardrails receive only `ToolExecutionResult.result`; a
+scope-end event sanitizer can separately sanitize the projected tool result
+annotation. Request intercepts affect the real request that reaches the tool or
+provider. Execution intercepts wrap the callback itself and are only available
+when the invocation uses managed execution.
+
+A tool execution intercept receives a `ToolExecutionContext` carrying the tool
+name, the arguments, and the managed `tool_call_id`. Use it when an intercept
+short-circuits execution and must still correlate its result with the
+originating tool call. See
+[Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
+for the per-binding contract.
+
+### LLM Application Execution Context
+
+Applications can pass data to LLM execution intercepts through
+`LlmExecutionContext`. This data stays separate from provider requests and event
+metadata. Managed calls accept this optional JSON object for both single responses
+and streams:
+
+```json
+{"data": {"com.example.review": {"reference": "review-123"}}}
+```
+
+LLM calls use their own context type. Use the following APIs to pass and read it:
+
+| Surface | Supply Context | Read Context in an Execution Intercept |
+| --- | --- | --- |
+| Rust | `api::llm::ApplicationExecutionContext` on `LlmCallExecuteParams.execution_context` or `LlmStreamCallExecuteParams.execution_context` | `context.execution_context()` |
+| Python | `LlmApplicationExecutionContext` through `llm.execute(..., execution_context=value)` or `llm.stream_execute(...)` | `context.execution_context` |
+| Node.js | `LlmApplicationExecutionContext` through `executionContext` in `typedLlmExecute` or `typedLlmStreamExecute` options | `context.executionContext` |
+| Go | `WithLLMApplicationExecutionContext(&LLMApplicationExecutionContext{...})` on `LlmCallExecute` or `LlmStreamCallExecute` | `context.ExecutionContext` |
+| C | `execution_context_json` immediately before `cancellation` on either managed LLM execute function | `context.execution_context_json` |
+| Rust native and gRPC plugins | Host-supplied context; SDKs export `LlmApplicationExecutionContext` | `context.execution_context()` |
+| Python gRPC plugins | Host-supplied `LlmApplicationExecutionContext` | `context.execution_context` |
+
+Python `typed.llm_execute` and `typed.llm_stream_execute` also forward the
+`execution_context` keyword. The native Node.js execute functions accept
+`executionContext` after `executionOptions`.
+
+Put application keys inside the optional `data` object. Relay rejects unknown
+fields outside `data`. It also rejects a context that is not an object or has
+`data` set to `null`. Relay treats no context, `{}`, and `{"data": {}}` as three
+different values.
+
+The complete context must fit within 16 KiB when encoded as UTF-8 JSON. It can
+contain up to 64 nested object or array levels. The root object counts as level 1.
+Relay rejects invalid context before it runs middleware or the provider. This
+check also applies when execution intercepts are disabled.
+
+The Go binding also limits raw `json.RawMessage` input before it converts values
+to a standard JSON format:
+
+- Each value is limited to 98,304 bytes after whitespace outside strings is removed.
+- The combined original length of all values is limited to 4 MiB, including
+  whitespace. Shared values count each time they appear in the map.
+- Go limits how much input it scans across all values. It counts duplicate object
+  members even when it keeps only the last value. It can reject a large input even
+  if the final context fits within 16 KiB.
+
+Only execution intercepts receive this context. Each intercept gets its own copy.
+Calling `next(request)` does not replace the context. Nested managed calls receive
+context only when their caller passes it. Relay does not copy the context into
+provider requests, lifecycle events, results, or telemetry.
+
+The intercept context still provides access to the request codec. It also provides
+access to the response codec for calls that return a single response. Streaming
+calls have no response codec.
+
+Relay checks the context structure and resource limits. Applications and middleware
+must define and check the contents of `data`. A review reference alone does not
+grant permission. Avoid copying private context into requests or events.
+
+Update C calls to `nemo_relay_llm_call_execute` and
+`nemo_relay_llm_stream_call_execute`. Add `execution_context_json` immediately
+before `cancellation`. Pass `NULL` to omit context. Rebuild with the updated
+header. These function signatures have changed, so older binaries cannot use
+the new library safely.
+
+The native ABI and worker protocol keep the same version numbers. Rebuild
+language bindings, native plugins, and workers with the matching SDK.
+Workers do not negotiate support for this context field. If an intercept needs
+context to make a policy decision, it must reject calls that omit context.
+
+### Node.js Callback Failures
+
+Node.js guardrail and request-intercept callbacks can return direct values or
+Promises. A thrown error or rejected Promise from a conditional-execution
+guardrail or request intercept rejects the managed call before protected
+execution or later middleware runs. A thrown error or rejected Promise from a
+sanitize guardrail or event sanitizer fails closed, withholding the governed
+emitted payload and recording the error for `getLastCallbackError()`.
+
+Scope-local variants are available through `nemo_relay.scope_local.register_*`, Node.js `scopeRegister*` helpers, and Rust `scope_register_*` functions.
+
+## Debug Middleware Order
+
+Middleware runs by ascending priority inside each middleware family. Families
+and lifecycle emission run in this order for managed tool calls:
+
+1. Conditional-execution guardrails.
+2. Request intercepts.
+3. Sanitize-request guardrails and start-event emission.
+4. Execution intercepts and the real callback or replacement.
+5. Sanitize-response guardrails and end-event emission.
+
+If a later middleware does not run, check whether an earlier conditional-execution guardrail rejected the call or a request intercept raised an error.
+
+## Common Issues
+
+Check these symptoms first when the workflow does not behave as expected.
+
+### Sanitized Data Reaches the Real Tool
+
+Use a sanitize guardrail only for event payloads. Use a request intercept when the real request should change.
+
+### Middleware Affects Unrelated Requests
+
+Register it scope-locally instead of globally.
+
+<Anchor id="duplicate-names-replace-behavior">
+
+### A Middleware Name Is Already Registered
+
+Registering middleware under a name already in use fails. Choose a unique
+name, or explicitly deregister the existing middleware before registering its
+replacement.
+
+</Anchor>
+
+### Execution Intercept Never Prints
+
+Confirm that the application uses the managed execute helper and that no guardrail rejected the request.
+
+## Next Steps
+
+Use these links to continue from this workflow into the next related task.
+
+- Use [Middleware](/about-nemo-relay/concepts/middleware) to review execution order.
+- Use [Code Examples](/instrument-applications/code-examples) for direct registration and partial-execution examples.
+- Use [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data) if middleware needs to work with framework objects.

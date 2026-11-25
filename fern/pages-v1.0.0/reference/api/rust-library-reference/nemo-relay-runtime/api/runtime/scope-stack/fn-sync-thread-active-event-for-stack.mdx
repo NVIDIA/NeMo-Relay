@@ -1,0 +1,17 @@
+---
+title: "Function sync_thread_active_event_for_stack"
+sidebar-title: "sync_thread_active_event_for_stack"
+slug: "/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/scope_stack/fn-sync-thread-active-event-for-stack"
+description: "Synchronize the task-local managed event onto an isolated thread stack."
+position: 28
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn sync_thread_active_event_for_stack(scope_stack: &amp;<a href=\"type-scopestackhandle\">ScopeStackHandle</a>)"}} /></pre>
+
+Synchronize the task-local managed event onto an isolated thread stack.
+
+Native async callbacks run on a plugin-owned executor. The host snapshots the callback's visible stack before crossing that boundary, so the managed event must be rebound to the snapshot's allocation while retaining its original scope anchor and W3C context.

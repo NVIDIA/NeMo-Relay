@@ -1,0 +1,326 @@
+---
+title: "Diagnostic Memory Inspection"
+description: "Inspect diagnostic backing by component and retained entry, alongside independently sampled resource context."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Memory inspection shows how much storage diagnostics reserves and uses. It can
+break down that usage by component and retained event. An optional resource
+sample reports process or system memory from a separate collection.
+
+*Reserved backing* means memory set aside for diagnostic storage. *Occupancy*
+means the part currently in use. Neither value measures resident set size (RSS),
+the memory currently resident in RAM. This view does not measure a plugin's
+application heap allocations.
+
+All read surfaces reuse the [query and authorization contract](/reference/diagnostics/api).
+Component identities can contain restricted metadata even when the memory view
+omits event text. Keep memory pages within the same inspection boundary as snapshots.
+
+## Aggregate Backing and Occupancy
+
+`Diagnostics::memory_usage()` and `DiagnosticsReader::memory_usage()` return the
+same `DiagnosticMemoryUsage` view. The history and detail-pool fields distinguish
+reserved backing, occupied capacity, and logical text:
+
+| Fields | Meaning |
+| --- | --- |
+| `event_slot_bytes`, `event_capacity` | Compiled size of one private retained event header and the admitted number of history slots. |
+| `history_reserved_bytes` | Complete circular-buffer allocation, including shared header, alignment, and all event slots. |
+| `history_occupied_bytes` | Multiplies the retained event count by `event_slot_bytes`. This excludes the shared buffer header and unused slots. |
+| `detail_capacity_bytes`, `detail_metadata_bytes`, `detail_reserved_bytes` | Whole-block payload capacity, metadata reserved for every block, and their combined backing bytes. |
+| `detail_bytes` | Existing gauge for occupied payload blocks, including unused space within those blocks. |
+| `detail_logical_bytes`, `detail_slack_bytes` | Retained UTF-8 message/correlation bytes and unused payload space within occupied blocks. |
+
+`detail_reserved_bytes` equals `detail_capacity_bytes + detail_metadata_bytes`.
+`detail_bytes` equals `detail_logical_bytes + detail_slack_bytes`. Free payload
+capacity is `detail_capacity_bytes - detail_bytes`. Block metadata differs from
+the existing `metadata_bytes` gauge, which describes admitted registration text.
+A pool rounds payload capacity down to whole blocks. Block size comes from
+`DiagnosticLimits.detail_block_bytes` and defaults to 256 bytes.
+
+Each retained event stores its message, session ID, and request ID in one chain
+of blocks. Ranges distinguish the three fields, including empty strings. UTF-8
+characters are never split across blocks. Storage is assigned in this order:
+message, session ID, then request ID.
+
+A field too large for the whole pool is omitted without removing older evidence.
+Fields that can fit can replace older events when free blocks run out. Output
+callbacks receive only `DiagnosticOutputSummary`. Message and correlation text
+stay in the snapshot available to authorized readers.
+
+Inspection derives the breakdown from existing storage. Logical text bytes
+require a bounded scan of block metadata when the view is requested. Recording
+adds no size ledger, per-event size field, or additional retained store. Disabled
+contexts report zero for every gauge. Eviction reduces occupancy and returns
+blocks for reuse while the reserved backing remains allocated. These values do
+not measure resident pages or whole-process working-set memory.
+
+Memory inspection is separate from the canonical diagnostic snapshot. Embedded
+bindings expose aggregate gauges through reader metadata. The memory view adds bounded
+pages for individual entries and components and independently sampled resource context through
+[`inspect_memory` and the authorized memory route](/reference/diagnostics/memory#detailed-memory-inspection).
+Canonical aggregate JSON quantities use lossless decimal strings. The native
+Rust aggregate fields retain `usize`.
+
+## Detailed Memory Inspection
+
+`DiagnosticsReader::inspect_memory(&DiagnosticQuery)` returns a bounded
+`MemoryInspectionLease`. The query uses the same selectors and caps as snapshots.
+`max_events` limits entry rows. Memory pages have their own schema version (1) and
+cursor discriminator. A snapshot cursor cannot resume a memory page. Each page
+rechecks the retained-state revision and authorization. Reads never freeze history.
+
+| Surface | Memory operation |
+| --- | --- |
+| Rust | `reader.inspect_memory(&query)` returns a lease with JSON and row access. |
+| CLI | Run `nemo-relay diagnostics --memory`. Add `--daemon-url` to inspect broker backing. |
+| Authorized HTTP | `GET /_nemo_relay/v1/diagnostics/memory?query=ENCODED_JSON` |
+| Python | `reader.inspect_memory(query)` or `reader.inspect_memory_json(query)` |
+| Node.js | `reader.inspectMemory(query)` or `reader.inspectMemoryJson(query)` |
+
+For a Rust lease, choose the access method for your task:
+
+- `as_bytes()` borrows the JSON page.
+- `components()` and `entries()` borrow the copied rows.
+- `to_memory_page()` decodes a separate owned page.
+
+To inspect one entry without component rows from the CLI, run this command:
+
+```bash title="CLI" showLineNumbers={false}
+nemo-relay diagnostics --memory --query '{"max_components":0,"max_events":1}'
+```
+
+This form works in Bash and PowerShell 7 with modern native argument passing.
+For Windows PowerShell 5.1, escape the embedded JSON quotes:
+
+```powershell
+nemo-relay diagnostics --memory --query '{\"max_components\":0,\"max_events\":1}'
+```
+
+See [JSON Queries in Windows Shells](/reference/diagnostics/cli#json-queries-in-windows-shells)
+for PowerShell's legacy argument-passing mode.
+
+To make the same request from code, choose your binding below. These examples
+assume that the service is configured and the caller has read access. The Rust
+example uses a core `DiagnosticsReader`.
+
+<Tabs>
+<Tab title="Rust" language="rust">
+<Code src="_code/memory/inspect.rs" language="rust" title="Inspect memory" lines="4-14" showLineNumbers={false} />
+</Tab>
+<Tab title="Python" language="python">
+<Code src="_code/memory/inspect.py" language="python" title="Inspect memory" lines="4-7" showLineNumbers={false} />
+</Tab>
+<Tab title="Node.js" language="node">
+<Code src="_code/memory/inspect.js" language="javascript" title="Inspect memory" lines="4-4" showLineNumbers={false} />
+</Tab>
+</Tabs>
+
+The shared HTTP route applies to gateways, daemon brokers, and managed Relay
+workers with permission to inspect the whole context. The daemon's periodic
+worker cache continues to retain ordinary diagnostic pages. `--worker --memory`
+is not supported. The new memory view does not expand plugin-worker read grants,
+introduce remote memory caching, or cause a broker to poll worker resources.
+
+## Interpret Memory Accounting
+
+Every response contains whole-context `aggregate` values and a reconciliation:
+
+```text
+aggregate.reserved_bytes = component_occupied_bytes
+                        + shared_or_unassigned_reserved_bytes
+```
+
+A component's charged bytes include its registration, all assigned code counters
+and window elements, extension descriptors, and retained entries. Assigned elements
+count even when unused.
+
+The shared remainder includes free capacity, history headers and padding, service
+structures, and query and projection workspaces. It includes memory in use as well
+as unused space. A replacement registration does not inherit an earlier one's
+charges. Refresh updates the existing registration without archiving it.
+
+Each entry includes its owning registration and acceptance sequence, with:
+
+```text
+occupied_bytes = header_bytes + detail_payload_bytes + detail_metadata_bytes
+logical_text_bytes + detail_slack_bytes = detail_payload_bytes
+```
+
+Message and correlation fields share one packed chain. Under the default profile,
+a three-byte message with no correlation has these storage costs:
+
+- Three logical text bytes.
+- 253 unused bytes in the 256-byte payload block.
+- One block's metadata.
+- The fixed event header.
+
+Empty or absent text needs no payload blocks. Compiled layouts vary by
+target. No address, pool index, message, or correlation text is returned.
+
+`selection` totals cover all matching rows, while `page` totals cover this response
+only. Event filters do not redefine whole-component charges. Entry bytes overlap
+component bytes. Occupied bytes overlap reservation. Do not add these quantities.
+The shared `loss` contract reports history eviction, omission, rejection, and
+sequence saturation independently of page truncation. The aggregate and attribution
+share one diagnostic capture revision. Transient query/projection occupancy is
+sampled during that capture.
+
+## Bounded Cost and Rust Views
+
+Memory and snapshot reads share `max_queries`, row/text budgets, and the encoded
+`max_snapshot_bytes` ceiling. Each admitted query workspace adds a numeric array
+indexed by `max_components`, capped component/entry rows, and fixed capture
+metadata. Startup includes these allocations in `max_owned_bytes`. A tightly sized
+`max_owned_bytes` profile must leave room for them. Zero-query
+contexts allocate no query scratch. Recording adds no size ledger or resource read.
+
+The accounting scan visits these storage areas:
+
+- Registered components and counters.
+- Window and extension slots.
+- Retained events.
+- Live detail blocks.
+
+It does not repeat the full event scan for each component. The state lock is held
+only while bounded data is copied. Serialization and delivery happen after the
+lock is released. Resource access and language conversion also happen outside the
+lock. Checking the response byte cap can require repeated visits to copied rows.
+
+First-use runtime helpers can allocate outside the retained backing.
+Both memory and ordinary snapshot leases offer allocation-free borrowed row
+iterators over copied storage. Their lifetimes are tied to the lease. They do not
+pin history. JSON access also borrows admitted output. Owned decoding is explicit
+and allocates caller-owned values outside the service budget. Binding conversion
+uses the existing independent copy admission and returns caller-owned results.
+
+Compiled element sizes vary with target and build. Use `event_slot_bytes` and
+the live accounting fields when sizing a deployment. A configured byte ceiling
+is a storage admission bound, not a latency guarantee. Choose polling intervals
+that account for the bounded scan and serialization cost under your workload.
+
+### Native SDK Read Storage
+
+An authorized native plugin reader uses the selected host context. Its SDK
+allocates bounded query and output buffers outside core's `max_owned_bytes`.
+Clones share one in-flight read-buffer pair per activation; a second read returns
+`Busy` before allocating that pair. Returned JSON and decoded pages remain
+caller-owned, so retaining multiple results can exceed this in-flight allowance.
+Refer to [native concurrency and buffer ownership](/build-plugins/native/diagnostics#concurrent-calls-and-recursion)
+for the separate SDK and host call limits. Reading a memory page does not start
+resource collection.
+
+## Resource Context and Precision
+
+### Enable a Sampling Source
+
+Enabling memory inspection does not start resource sampling. Before expecting a
+resource sample in a memory page:
+
+1. Enable diagnostics and a nonzero query pool for the runtime you will inspect.
+2. Activate the `resource_metrics` component and keep its memory category enabled.
+   Follow [Enable the Component](/configure-plugins/resource-metrics#enable-the-component)
+   for a complete component configuration.
+3. Enable `components.config.polling.enabled` to collect periodically, or call
+   the existing [on-demand collection API](/configure-plugins/resource-metrics#collect-one-snapshot).
+   Polling is disabled by default. Enabling the component alone does not start it.
+4. Keep `components.config.memory_inspection.enabled` enabled, then request the
+   diagnostic memory page after a collection completes.
+
+`awaiting_target` means the collector is waiting for a collection target.
+`not_yet_sampled` means there is no completed sample available yet. Check the
+configured [measurement scope](/configure-plugins/resource-metrics#measurement-scope)
+and sampling lifecycle before interpreting either status as a collection failure.
+Repeated inspection does not trigger sampling. An unavailable resource sample
+does not prevent inspection of the diagnostic service's own memory backing.
+
+### Configure the Memory Projection
+
+The resource manager retains one fixed memory-only projection from existing
+successful polling/on-demand collections. Inspection reads that projection. It
+never initializes the resource plugin, schedules collection, changes its target,
+or reads configuration files. The resource plugin's existing resolver owns:
+
+<Code src="_code/memory/memory_projection.toml" language="toml" title="memory_projection.toml" lines="4-7" showLineNumbers={false} />
+
+The cache supports a fixed set of memory fields and eight limit-event slots.
+If a sample exceeds those limits, its status is `capacity_unavailable`. The cache
+keeps the previous valid sample, if any, with its actual identity and age. It
+retains no growing map, sample history, or `Arc` snapshot graph.
+
+The fixed cache uses memory outside the diagnostic core reservation. A query's
+copy of the resource view fits within its reserved workspace.
+`projection_slot_bytes` describes only the cache layout. It does not include the
+whole manager, collector, or concurrent collection workspaces.
+
+A resource sample can make a diagnostic row or even an empty response exceed the
+requested byte cap. In that case, the response omits the resource sample with
+`capacity_unavailable` and tries the diagnostic page again. Resource context does
+not cause the loss of a diagnostic response that would otherwise fit.
+
+A memory page reports resource availability separately from diagnostic state.
+The `resource` status explains whether a sample is available:
+
+| Status | Meaning |
+| --- | --- |
+| `disabled` | Collection or the memory projection is disabled. |
+| `awaiting_target` | The collector is waiting for a collection target. |
+| `not_yet_sampled` | No completed sample is available yet. |
+| `available` | A sample is available. Check its age and `stale` flag. |
+| `failed` | Resource collection failed. |
+| `invalidated` | A lifecycle or target change invalidated the sample. |
+| `unsupported` | The resource context is not supported. |
+| `capacity_unavailable` | The sample exceeds a cache or response limit. |
+
+A retained sample has a separate `stale` flag. Its age uses local monotonic time
+since collection completed. Missing fields were not reported because they were
+unsupported or unreadable. They do not become zero. A non-finite measurement uses
+`kind: non_finite`.
+
+A sample's identity has five parts:
+
+- The collector UUID.
+- The runtime generation.
+- The target generation.
+- The sample stream.
+- An ordinal assigned when collection starts.
+
+An older collection cannot overwrite a newer attempt's result. Target changes
+and teardown invalidate the cache.
+
+Collection timing, diagnostic capture timing, and sample age describe separate
+operations. They are not captured atomically across subsystems. A resource sample
+can change between pages even when the diagnostic cursor stays valid. Check its
+identity and age on every page.
+
+Verified process association compares PID and process-start identity captured by
+the existing collector. `host_process` includes the embedding application's other
+work. `host_process_tree` includes descendants. A supervised child tree can exclude
+Relay. Global samples remain system context. Samples can be shared across local
+diagnostic sources and must not be summed once per source.
+
+Individual fields retain their own scope: system capacity remains system data in
+an application snapshot. Environment accounting/limits/pressure remain environment
+data. Resident, private, footprint, virtual, and peak resident measurements retain
+their platform meaning, units, and reported process coverage. Integral values use
+`{kind: "integer", value: "..."}`. Finite converted fractions use
+`{kind: "decimal", value: 1.25}`. Existing resource API serialization is unchanged.
+
+Canonical aggregate memory quantities use decimal strings. Rust retains
+its existing native `usize` aggregate fields with checked wire conversion. Python
+uses `int`, and Node uses `bigint`. Node `info().memory` uses `bigint` for aggregate
+memory quantities. Other small schema/PID fields remain ordinary numbers.
+
+Diagnostic backing is not process working set or per-plugin heap usage. Eviction
+reuses backing. It does not promise an RSS reduction. Do not subtract reservation
+from RSS or distribute RSS proportionally across components. This view adds no
+health classification, pressure action, CPU attribution, or metrics export.
+
+The resource completion path copies measurements into diagnostics. Diagnostic
+inspection data never flows back into resource marks or logs. Sanitizers and
+exporters also never receive that data. This includes inspection identities,
+queries, retained detail, and joined pages. Future exports require a separately approved
+aggregate numeric projection and cardinality/disclosure policy.

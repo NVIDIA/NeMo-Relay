@@ -1,0 +1,175 @@
+---
+title: "Enum Invocation"
+sidebar-title: "Invocation"
+slug: "/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/invoke_request/enum-invocation"
+description: "Exactly one recognized alternative is required when this message is present."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum Invocation &#123;\nShow 16 variants    Subscriber(<a href=\"../struct-event\">Event</a>),\n    EventMetadataInjector(<a href=\"../struct-event\">Event</a>),\n    MarkSanitizeGuardrail(<a href=\"../struct-event\">Event</a>),\n    ScopeSanitizeStartGuardrail(<a href=\"../struct-event\">Event</a>),\n    ScopeSanitizeEndGuardrail(<a href=\"../struct-event\">Event</a>),\n    ToolSanitizeRequestGuardrail(<a href=\"../struct-toolvalueinvocation\">ToolValueInvocation</a>),\n    ToolSanitizeResponseGuardrail(<a href=\"../struct-toolvalueinvocation\">ToolValueInvocation</a>),\n    ToolConditionalExecutionGuardrail(<a href=\"../struct-toolvalueinvocation\">ToolValueInvocation</a>),\n    ToolRequestIntercept(<a href=\"../struct-toolvalueinvocation\">ToolValueInvocation</a>),\n    ToolExecutionIntercept(<a href=\"../struct-toolexecutioninvocation\">ToolExecutionInvocation</a>),\n    LlmSanitizeRequestGuardrail(<a href=\"../struct-llmsanitizerequestinvocation\">LlmSanitizeRequestInvocation</a>),\n    LlmSanitizeResponseGuardrail(<a href=\"../struct-llmsanitizeresponseinvocation\">LlmSanitizeResponseInvocation</a>),\n    LlmConditionalExecutionGuardrail(<a href=\"../struct-llmconditionalinvocation\">LlmConditionalInvocation</a>),\n    LlmRequestIntercept(<a href=\"../struct-llmrequestinvocation\">LlmRequestInvocation</a>),\n    LlmExecutionIntercept(<a href=\"../struct-llmexecutioninvocation\">LlmExecutionInvocation</a>),\n    ConditionalMiddlewareGuardrail(<a href=\"../struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>),\n&#125;"}} /></pre>
+
+Exactly one recognized alternative is required when this message is present.
+
+## Variants
+
+### `Subscriber(Event)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Subscriber(<a href=\"../struct-event\">Event</a>)"}} /></pre>
+
+Observes an event and completes without returning a rewritten value.
+
+### `EventMetadataInjector(Event)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "EventMetadataInjector(<a href=\"../struct-event\">Event</a>)"}} /></pre>
+
+Produces open metadata additions for an observed event.
+
+### `MarkSanitizeGuardrail(Event)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "MarkSanitizeGuardrail(<a href=\"../struct-event\">Event</a>)"}} /></pre>
+
+Replaces sanitizable fields of a mark before publication.
+
+### `ScopeSanitizeStartGuardrail(Event)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ScopeSanitizeStartGuardrail(<a href=\"../struct-event\">Event</a>)"}} /></pre>
+
+Replaces sanitizable fields of a scope-start event before publication.
+
+### `ScopeSanitizeEndGuardrail(Event)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ScopeSanitizeEndGuardrail(<a href=\"../struct-event\">Event</a>)"}} /></pre>
+
+Replaces sanitizable fields of a scope-end event before publication.
+
+### `ToolSanitizeRequestGuardrail(ToolValueInvocation)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ToolSanitizeRequestGuardrail(<a href=\"../struct-toolvalueinvocation\">ToolValueInvocation</a>)"}} /></pre>
+
+Rewrites tool request arguments before execution.
+
+### `ToolSanitizeResponseGuardrail(ToolValueInvocation)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ToolSanitizeResponseGuardrail(<a href=\"../struct-toolvalueinvocation\">ToolValueInvocation</a>)"}} /></pre>
+
+Rewrites the application tool result after execution.
+
+### `ToolConditionalExecutionGuardrail(ToolValueInvocation)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ToolConditionalExecutionGuardrail(<a href=\"../struct-toolvalueinvocation\">ToolValueInvocation</a>)"}} /></pre>
+
+Allows or blocks execution of a tool request.
+
+### `ToolRequestIntercept(ToolValueInvocation)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ToolRequestIntercept(<a href=\"../struct-toolvalueinvocation\">ToolValueInvocation</a>)"}} /></pre>
+
+Rewrites a tool request within the ordered interceptor chain.
+
+### `ToolExecutionIntercept(ToolExecutionInvocation)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ToolExecutionIntercept(<a href=\"../struct-toolexecutioninvocation\">ToolExecutionInvocation</a>)"}} /></pre>
+
+Executes or delegates a managed tool call and may schedule marks.
+
+### `LlmSanitizeRequestGuardrail(LlmSanitizeRequestInvocation)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LlmSanitizeRequestGuardrail(<a href=\"../struct-llmsanitizerequestinvocation\">LlmSanitizeRequestInvocation</a>)"}} /></pre>
+
+Rewrites a provider LLM request using its codec context.
+
+### `LlmSanitizeResponseGuardrail(LlmSanitizeResponseInvocation)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LlmSanitizeResponseGuardrail(<a href=\"../struct-llmsanitizeresponseinvocation\">LlmSanitizeResponseInvocation</a>)"}} /></pre>
+
+Rewrites a provider LLM response using its codec context.
+
+### `LlmConditionalExecutionGuardrail(LlmConditionalInvocation)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LlmConditionalExecutionGuardrail(<a href=\"../struct-llmconditionalinvocation\">LlmConditionalInvocation</a>)"}} /></pre>
+
+Allows or blocks execution of an LLM request.
+
+### `LlmRequestIntercept(LlmRequestInvocation)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LlmRequestIntercept(<a href=\"../struct-llmrequestinvocation\">LlmRequestInvocation</a>)"}} /></pre>
+
+Rewrites a provider request or normalized annotation and may contribute evidence.
+
+### `LlmExecutionIntercept(LlmExecutionInvocation)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LlmExecutionIntercept(<a href=\"../struct-llmexecutioninvocation\">LlmExecutionInvocation</a>)"}} /></pre>
+
+Executes or delegates a unary LLM call with request and response codec access.
+
+### `ConditionalMiddlewareGuardrail(ConditionalMiddlewareInvocation)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ConditionalMiddlewareGuardrail(<a href=\"../struct-conditionalmiddlewareinvocation\">ConditionalMiddlewareInvocation</a>)"}} /></pre>
+
+Allows or blocks selected middleware registrations before they execute.
+
+## Implementations
+
+### `impl Invocation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-invocation\">Invocation</a>"}} /></pre>
+
+#### `encode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn encode(&amp;self, buf: &amp;mut impl BufMut)"}} /></pre>
+
+Encodes the message to a buffer.
+
+#### `merge`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn merge(\n    field: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-invocation\">Invocation</a>&gt;,\n    tag: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    wire_type: WireType,\n    buf: &amp;mut impl Buf,\n    ctx: DecodeContext,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.DecodeError.html\">DecodeError</a>&gt;"}} /></pre>
+
+Decodes an instance of the message from a buffer, and merges it into self.
+
+#### `encoded_len`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn encoded_len(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>"}} /></pre>
+
+Returns the encoded length of the message without a length delimiter.
+
+## Trait Implementations
+
+### `impl Clone for Invocation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-invocation\">Invocation</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-invocation\">Invocation</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for Invocation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-invocation\">Invocation</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl PartialEq for Invocation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-invocation\">Invocation</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-invocation\">Invocation</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl StructuralPartialEq for Invocation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-invocation\">Invocation</a>"}} /></pre>

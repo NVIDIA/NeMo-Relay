@@ -1,0 +1,35 @@
+---
+title: "Module conversions"
+sidebar-title: "conversions"
+description: "Typed domain conversions for the namespaced worker contract. Typed conversions between shared domain values and protobuf values."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Typed domain conversions for the namespaced worker contract. Typed conversions between shared domain values and protobuf values.
+
+The host and Rust worker use the same [`WireValue`](/reference/api/rust-library-reference/nemo-relay-worker-proto/conversions/trait-wirevalue) implementations so native and worker callbacks retain the types from `nemo_relay_types`. Generated protobuf types describe transport presence and alternatives separately.
+
+`dto.rs` declares struct fields, enum mappings, and collection wrappers. Matching field names use `field: mode`; renames use `source => target: mode`. Both directions construct every struct field, making omitted mappings a compile-time error. `variants.rs` handles enums and structural differences explicitly. Shared helpers here check required values, integer widths, timestamps, and JSON syntax while preserving native null semantics.
+
+See the crate's `CONTRACT.md`, "Rust domain conversions", for field modes, representation differences, and the maintenance workflow.
+
+## Structs
+
+- [ConversionError](/reference/api/rust-library-reference/nemo-relay-worker-proto/conversions/struct-conversionerror): A malformed or unsupported value at the worker protocol boundary.
+
+## Traits
+
+- [WireValue](/reference/api/rust-library-reference/nemo-relay-worker-proto/conversions/trait-wirevalue): Bidirectional conversion without exposing transport representation to callbacks.
+
+## Functions
+
+- [decode](/reference/api/rust-library-reference/nemo-relay-worker-proto/conversions/fn-decode): Decode a protobuf value into its shared domain representation.
+- [encode](/reference/api/rust-library-reference/nemo-relay-worker-proto/conversions/fn-encode): Encode a domain value into its protobuf representation.
+
+## Type Aliases
+
+- [Result](/reference/api/rust-library-reference/nemo-relay-worker-proto/conversions/type-result): Result of a domain/protobuf conversion.

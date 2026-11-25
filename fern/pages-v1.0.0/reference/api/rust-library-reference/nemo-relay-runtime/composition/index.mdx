@@ -1,0 +1,25 @@
+---
+title: "Module composition"
+sidebar-title: "composition"
+description: "Services supplied by the SDK or an embedding application. Component services supplied by plugin-host or an embedding application."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Services supplied by the SDK or an embedding application. Component services supplied by plugin-host or an embedding application.
+
+## Structs
+
+- [RuntimeServices](/reference/api/rust-library-reference/nemo-relay-runtime/composition/struct-runtimeservices): Composition callbacks owned by the embedding host, independent from the runtime engine.
+
+## Functions
+
+- [install_runtime_services](/reference/api/rust-library-reference/nemo-relay-runtime/composition/fn-install-runtime-services): Install composition once; subsequent initialization entry points preserve the chosen host.
+- [services](/reference/api/rust-library-reference/nemo-relay-runtime/composition/fn-services): Return the host services, or an uncomposed engine with no built-in components.
+
+## Type Aliases
+
+- [SnapshotSink](/reference/api/rust-library-reference/nemo-relay-runtime/composition/type-snapshotsink): Callback receiving a resource snapshot without owning a collection implementation.

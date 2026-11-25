@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Within an existing resource_metrics component's configuration:
+[components.config.memory_inspection]
+enabled = true
+stale_after_millis = 30000

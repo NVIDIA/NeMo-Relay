@@ -1,0 +1,40 @@
+---
+title: "Module content"
+sidebar-title: "content"
+description: "Typed content traversal, shared selection, and owned transport snapshots. Borrowed access to normalized message content."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Typed content traversal, shared selection, and owned transport snapshots. Borrowed access to normalized message content.
+
+Views do not reconstruct provider wire order, parse tool arguments, or retain conversation state. Locations refer to the current normalized source only.
+
+## Structs
+
+- [ContentCursor](/reference/api/rust-library-reference/nemo-relay-types/codec/content/struct-contentcursor): Forward-only traversal state, independent of the borrowed source lifetime.
+- [ContentEntry](/reference/api/rust-library-reference/nemo-relay-types/codec/content/struct-contententry): One typed entry and its location in the normalized source.
+- [ContentLocation](/reference/api/rust-library-reference/nemo-relay-types/codec/content/struct-contentlocation): Read-time location; not a stable edit handle or provider-wire offset.
+- [ContentSnapshot](/reference/api/rust-library-reference/nemo-relay-types/codec/content/struct-contentsnapshot): Owned snapshot; materialization copies selected content for transport or independent retention.
+- [MessageView](/reference/api/rust-library-reference/nemo-relay-types/codec/content/struct-messageview): Shared read-only view of a request item, response output, or instructions.
+- [SnapshotEntry](/reference/api/rust-library-reference/nemo-relay-types/codec/content/struct-snapshotentry): One owned typed entry and its read-time normalized location.
+- [SnapshotToolCall](/reference/api/rust-library-reference/nemo-relay-types/codec/content/struct-snapshottoolcall): Owned invocation identifiers, name, and arguments.
+- [SnapshotToolResult](/reference/api/rust-library-reference/nemo-relay-types/codec/content/struct-snapshottoolresult): Owned result identifiers and complete payload.
+- [ToolCallView](/reference/api/rust-library-reference/nemo-relay-types/codec/content/struct-toolcallview): Borrowed tool-call data, retaining the source's identifier distinctions.
+- [ToolResultView](/reference/api/rust-library-reference/nemo-relay-types/codec/content/struct-toolresultview): Borrowed tool result. Its payload is excluded from default text extraction.
+
+## Enums
+
+- [ContentField](/reference/api/rust-library-reference/nemo-relay-types/codec/content/enum-contentfield): Field containing an entry, relative to its normalized root.
+- [ContentKind](/reference/api/rust-library-reference/nemo-relay-types/codec/content/enum-contentkind): Typed content without cloning the normalized source.
+- [ContentRoot](/reference/api/rust-library-reference/nemo-relay-types/codec/content/enum-contentroot): The normalized object against which a content location is interpreted.
+- [ContentSelection](/reference/api/rust-library-reference/nemo-relay-types/codec/content/enum-contentselection): Selection applied before extraction. Invalid source/selection pairs are errors.
+- [ContentSelectionError](/reference/api/rust-library-reference/nemo-relay-types/codec/content/enum-contentselectionerror): Invalid content-inspection selection, independent of any transport.
+- [ContentSource](/reference/api/rust-library-reference/nemo-relay-types/codec/content/enum-contentsource): Borrowed normalized input for content inspection; no provider decoding occurs.
+- [PayloadRef](/reference/api/rust-library-reference/nemo-relay-types/codec/content/enum-payloadref): A payload in its existing representation. No parsing or rendering is performed.
+- [RetainedContent](/reference/api/rust-library-reference/nemo-relay-types/codec/content/enum-retainedcontent): Owned backing for lazy traversal after the original annotation is dropped.
+- [SnapshotKind](/reference/api/rust-library-reference/nemo-relay-types/codec/content/enum-snapshotkind): Owned counterpart of borrowed content kinds.
+- [SnapshotPayload](/reference/api/rust-library-reference/nemo-relay-types/codec/content/enum-snapshotpayload): Tool payload in its existing normalized representation.

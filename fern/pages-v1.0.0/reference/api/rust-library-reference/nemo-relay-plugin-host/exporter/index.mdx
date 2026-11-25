@@ -1,0 +1,28 @@
+---
+title: "Module exporter"
+sidebar-title: "exporter"
+description: "Exporter constructors bound to the shared execution runtime. Exporter constructors bound to the execution runtime's scopes, codecs, and diagnostics."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Exporter constructors bound to the shared execution runtime. Exporter constructors bound to the execution runtime's scopes, codecs, and diagnostics.
+
+Configuration and exporter types live in `nemo-relay-observability`. These constructors supply the runtime host internally; exporters are ready to register or receive events immediately.
+
+## Functions
+
+- [atif](/reference/api/rust-library-reference/nemo-relay-plugin-host/exporter/fn-atif): Create an ATIF exporter using the runtime's provider codecs and scope context.
+- [atif_for_trajectory](/reference/api/rust-library-reference/nemo-relay-plugin-host/exporter/fn-atif-for-trajectory): Create a runtime-bound ATIF exporter with an explicit trajectory identifier.
+- [atof](/reference/api/rust-library-reference/nemo-relay-plugin-host/exporter/fn-atof): Create an ATOF exporter ready for core subscriber registration.
+- [opentelemetry](/reference/api/rust-library-reference/nemo-relay-plugin-host/exporter/fn-opentelemetry): Create an OpenTelemetry or OpenInference trace subscriber for core events.
+- [opentelemetry_file](/reference/api/rust-library-reference/nemo-relay-plugin-host/exporter/fn-opentelemetry-file): Create an OTLP file subscriber using the runtime's provider codecs and scope context.
+- [opentelemetry_from_provider](/reference/api/rust-library-reference/nemo-relay-plugin-host/exporter/fn-opentelemetry-from-provider): Create a runtime-bound subscriber from a configured tracer provider.
+- [opentelemetry_from_provider_with_options](/reference/api/rust-library-reference/nemo-relay-plugin-host/exporter/fn-opentelemetry-from-provider-with-options): Create a runtime-bound trace subscriber with composable projection options.
+- [opentelemetry_from_provider_with_type](/reference/api/rust-library-reference/nemo-relay-plugin-host/exporter/fn-opentelemetry-from-provider-with-type): Create a runtime-bound subscriber with a selected trace projection.
+- [opentelemetry_from_provider_with_type_and_options](/reference/api/rust-library-reference/nemo-relay-plugin-host/exporter/fn-opentelemetry-from-provider-with-type-and-options): Create a runtime-bound typed trace subscriber with projection options.
+- [opentelemetry_logs](/reference/api/rust-library-reference/nemo-relay-plugin-host/exporter/fn-opentelemetry-logs): Create an OpenTelemetry log subscriber for core events.
+- [opentelemetry_metrics](/reference/api/rust-library-reference/nemo-relay-plugin-host/exporter/fn-opentelemetry-metrics): Create an OpenTelemetry metric subscriber for core events.

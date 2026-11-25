@@ -1,0 +1,30 @@
+---
+title: "Module manager"
+sidebar-title: "manager"
+description: "Sampling ownership and polling lifecycle. Process resource collection, sampling ownership, and polling lifecycle."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Sampling ownership and polling lifecycle. Process resource collection, sampling ownership, and polling lifecycle.
+
+## Structs
+
+- [ResourceMetricsRuntime](/reference/api/rust-library-reference/nemo-relay-resource-metrics/manager/struct-resourcemetricsruntime): Owns the optional resource metrics polling thread for a built-in plugin activation.
+
+## Functions
+
+- [collect_on_demand](/reference/api/rust-library-reference/nemo-relay-resource-metrics/manager/fn-collect-on-demand)
+- [ensure_process_owner](/reference/api/rust-library-reference/nemo-relay-resource-metrics/manager/fn-ensure-process-owner)
+- [invalidated_snapshot](/reference/api/rust-library-reference/nemo-relay-resource-metrics/manager/fn-invalidated-snapshot)
+- [latest_memory_view](/reference/api/rust-library-reference/nemo-relay-resource-metrics/manager/fn-latest-memory-view): Read an existing manager only. Inspection must not resolve settings, start a manager, collect, or retarget it. Fork checks precede every potentially inherited lock.
+- [prepare_cli_owned_process_tree](/reference/api/rust-library-reference/nemo-relay-resource-metrics/manager/fn-prepare-cli-owned-process-tree)
+- [runtime_inherited_across_fork](/reference/api/rust-library-reference/nemo-relay-resource-metrics/manager/fn-runtime-inherited-across-fork)
+- [target_owned_process_tree](/reference/api/rust-library-reference/nemo-relay-resource-metrics/manager/fn-target-owned-process-tree)
+
+## Type Aliases
+
+- [SnapshotSink](/reference/api/rust-library-reference/nemo-relay-resource-metrics/manager/type-snapshotsink): Receives each periodic resource snapshot.

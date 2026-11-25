@@ -1,0 +1,46 @@
+---
+title: "Struct Http Upload Config"
+sidebar-title: "HttpUploadConfig"
+description: "API documentation for the Rust `HttpUploadConfig` struct in crate `nemo_relay_observability`."
+position: 14
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct HttpUploadConfig &#123;\n    pub endpoint: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub headers: <a href=\"https://doc.rust-lang.org/1.96.1/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub header_file: <a href=\"https://doc.rust-lang.org/1.96.1/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub timeout: <a href=\"https://doc.rust-lang.org/1.96.1/core/time/struct.Duration.html\">Duration</a>,\n&#125;"}} /></pre>
+
+## Fields
+
+### `endpoint: String`
+
+### `headers: HashMap<String, String>`
+
+### `header_file: HashMap<String, String>`
+
+### `timeout: Duration`
+
+## Implementations
+
+### `impl HttpUploadConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-httpuploadconfig\">HttpUploadConfig</a>"}} /></pre>
+
+#### `resolve`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn resolve(\n    index: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    http: &amp;<a href=\"struct-httpstorageconfig\">HttpStorageConfig</a>,\n    plaintext: &amp;PlaintextPolicy,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/io/error/type.Result.html\">Result</a>&lt;Self&gt;"}} /></pre>
+
+## Trait Implementations
+
+### `impl Clone for HttpUploadConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-httpuploadconfig\">HttpUploadConfig</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-httpuploadconfig\">HttpUploadConfig</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

@@ -1,0 +1,22 @@
+---
+title: "Module catalog"
+sidebar-title: "catalog"
+description: "Catalog loading and source-aware resolution. Catalog source loading and resolution with caller-owned file access."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Catalog loading and source-aware resolution. Catalog source loading and resolution with caller-owned file access.
+
+## Structs
+
+- [PricingCatalogSource](/reference/api/rust-library-reference/nemo-relay-model-pricing/catalog/struct-pricingcatalogsource): One catalog and its source identity.
+- [ResolvedPricing](/reference/api/rust-library-reference/nemo-relay-model-pricing/catalog/struct-resolvedpricing): A matched entry with its source identity.
+
+## Functions
+
+- [pricing_catalog_sources_from_config](/reference/api/rust-library-reference/nemo-relay-model-pricing/catalog/fn-pricing-catalog-sources-from-config): Load configured sources in precedence order using the caller's file access policy.
+- [resolve_pricing](/reference/api/rust-library-reference/nemo-relay-model-pricing/catalog/fn-resolve-pricing): Resolve a provider/model pair against sources in precedence order.

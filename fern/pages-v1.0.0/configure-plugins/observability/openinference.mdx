@@ -1,0 +1,62 @@
+---
+title: "OpenInference"
+description: "Export OpenInference-compatible traces through an OpenTelemetry endpoint."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+OpenInference is a fixed projection of the unified OpenTelemetry exporter. It
+is always available and no longer has a separate configuration section,
+subscriber class, or Cargo feature.
+
+## Plugin Configuration
+
+Select `openinference` on an endpoint in the `opentelemetry` section:
+
+```toml
+[components.config]
+version = 4
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = "http://localhost:6006/v1/traces"
+transport = "http_binary"
+service_name = "agent-service"
+instrumentation_scope = "opentelemetry"
+timeout_millis = 3000
+
+[components.config.opentelemetry.endpoints.header_env]
+authorization = "OTEL_AUTHORIZATION"
+
+[components.config.opentelemetry.endpoints.resource_attributes]
+"deployment.environment" = "dev"
+```
+
+The endpoint emits the existing OpenInference scope, tool, LLM, and mark
+projection. It supports the `mark_projection`, `mark_exclude_names`, and
+[`attribute_mappings`](./opentelemetry#attribute-mappings) controls on the typed
+endpoint.
+
+Normalized tool results emit one `llm.input_messages` entry per result with
+`message.role = "tool"`, `message.tool_call_id`, and `message.content`.
+Anthropic user messages that contain only `tool_result` blocks expand into
+separate entries so parallel tool results retain their original order and
+correlation IDs.
+
+Set `OTEL_AUTHORIZATION` to the complete authorization header value before
+activation. NeMo Relay snapshots the value when the plugin
+activates. The variable must be set and nonblank. A header name cannot appear
+in both `headers` and `header_env`, including names that differ only by ASCII
+case. The resolved value cannot have surrounding whitespace.
+
+For the complete endpoint field table and multi-endpoint behavior, refer to
+[OpenTelemetry](/configure-plugins/observability/opentelemetry).
+
+## Direct Subscriber
+
+For direct API examples and lifecycle contracts, refer to
+[Direct Subscriber](/reference/api/observability#direct-subscriber).

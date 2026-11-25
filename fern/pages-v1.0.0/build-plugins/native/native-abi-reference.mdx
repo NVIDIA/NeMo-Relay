@@ -1,0 +1,149 @@
+---
+title: "Native ABI Reference"
+description: "Understand native interface versions, typed values, execution, and cleanup."
+position: 26
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the `Plugin` trait in `nemo-relay-plugin` to write a native plugin. The
+`nemo-relay-plugin-abi` crate defines the application binary interface (ABI)
+between the plugin library and Relay. Its package version follows Relay releases.
+The explicit native contract determines binary compatibility.
+
+Native plugins run in the Relay process and require full trust.
+
+## Bootstrap and Version Discovery
+
+The SDK exports a frozen Relay bootstrap and a standard `xabi` manifest. The
+bootstrap provides the plugin descriptor, its contract schema, and versioned
+factory exports. Its layout stays fixed throughout one native major version.
+The schema covers complete method signatures, including future results, and
+checks the layouts and ownership rules used by the typed values.
+
+Relay checks the bootstrap and the plugin's required modules before calling a
+factory. Missing modules, incompatible layouts, and a descriptor that disagrees
+with the manifest cause loading to fail before registration. Looking up the
+descriptor and modules does not create components, register callbacks, or start
+executors.
+
+Declare `compat.native_api = "v1.0"` and `load.library` in the manifest. Set
+`compat.relay` to the Relay release range that the plugin supports.
+
+The export macro sets the required native contract from the build SDK. The
+current SDK uses native contract **v1.0**; the manifest and exported descriptor
+must agree. The native contract is independent of Relay's package version and
+the worker protocol version.
+
+The complete ABI schema must match before a factory can be created; the version
+string alone does not prove binary compatibility. A plugin built against an
+incompatible invocation layout is rejected, even when its manifest also declares
+v1.0. Rebuild the plugin with an SDK compatible with the host.
+
+Published layouts, enum variants, signatures, marker traits, ownership rules
+and behavior stay fixed within each contract. Add interfaces
+through versioned modules; breaking layout or dependency ABI changes require a
+new native major as appropriate. Dependency updates must pass the binary
+compatibility tests.
+
+## Values and Capabilities
+
+The adapters convert Rust strings, vectors, options, and results to frozen C
+records. Capabilities use generated xabi handles. Each allocation is released
+by the library that created it, including after a failed conversion. Tool outcomes,
+callback contexts, registrations, and diagnostics use typed records. Application payloads use recursive typed JSON. This format
+preserves signed and unsigned integers, finite floating-point values, Unicode,
+embedded NULs, and nested values. Conversion rejects non-finite numbers and
+duplicate object keys.
+
+Tokio objects, ordinary Rust futures, and `serde_json::Value` stay within the
+library that owns them.
+
+Scope and codec handles give callbacks access to Relay runtime operations.
+Adapters restore the callback's scope stack, event parentage, and codecs before
+an invocation and each future poll. After the host revokes a handle, it cannot
+perform runtime operations. Refer to
+[PluginContext](/build-plugins/fundamentals/plugin-context) for codec lifetimes.
+
+### Application Execution Context
+
+The v1.0 invocation carries optional application execution context separately
+from its business argument value. Its concrete native context contains an
+optional `data` map represented by owned lossless JSON fields. The ordinary tool
+callback and registration path carry this envelope.
+
+The SDK exposes the checked `ApplicationExecutionContext` through
+`context.execution_context()` in a Rust tool execution intercept. The outer
+context has Relay-defined fields. Applications put their payloads inside `data`,
+and middleware validates and interprets those payloads. Context never becomes
+part of the tool arguments, and structural validation grants no authorization.
+See [Application Execution Context in Add Middleware](/instrument-applications/advanced-guide#application-execution-context)
+for the schema, limits, trust checks and application integration example.
+
+The host checks the complete declared contract before factory creation. A plugin
+with an incompatible invocation layout fails to load. Rebuild it with an SDK
+compatible with the host.
+
+### Runtime Scope and Mark Arguments
+
+The `scope.push` and `mark` operations accept an optional `parent` object returned
+by `scope.current` or `scope.push`. Its `uuid` field identifies the explicit event
+parent. Without it, Relay uses the current scope or active event.
+
+`scope.push` accepts an `attributes` integer bitmask: `1` sets `PARALLEL` and `2`
+sets `RELOCATABLE`. Missing or null attributes mean empty flags. Unknown bits,
+negative values, and non-integer values return an error.
+
+`scope.push`, `scope.pop`, and `mark` accept an optional signed `timestamp` in
+microseconds since the Unix epoch. Missing or null timestamps use the runtime's
+default time. The SDK accepts `SystemTime` and rounds pre-epoch values down to
+the nearest microsecond.
+
+## Futures, Streams, and Shutdown
+
+The `async-ffi` crate carries futures and wakers across the library boundary.
+Pending polls and borrowed wake-ups do not allocate in the transport.
+Typed middleware futures are polled by their caller under the plugin's captured Relay
+scope. Inline execution creates no plugin runtime. A plugin can opt into a shared
+Tokio runtime; the SDK enters that runtime around each user-future poll and drop.
+Dropping a foreign future cancels its work, including an unpolled future. A
+continuation can make repeated or concurrent downstream calls.
+
+Streams use bounded queues, pass errors to the consumer, and support explicit
+close. A full queue slows the producer until the consumer reads more data.
+Subscribers run synchronously. Raw synchronous callbacks use checked callback
+descriptors. Use `register_synchronous_stream_callback` for a synchronous factory
+that returns a checked stream descriptor. The SDK runs its pulls and close work
+under component ownership, with optional shared Tokio runtime support. A synchronous
+factory runs off the caller thread and can read downstream items before returning.
+
+Closing a component stops new work, removes registrations, revokes runtime
+access, and cancels active work. Stream creation finishes before the final
+stream cleanup pass. The host then waits for tracked tasks to finish,
+releases callbacks and the component's runtime lease. Synchronous close uses a separate
+teardown thread. If cleanup fails, close reports the error and keeps ownership
+so the caller can retry.
+
+Python and Node.js provide awaitable close methods. Rust, C, and Go provide
+synchronous close methods.
+
+Libraries and their staged dependencies stay loaded until process exit. Component
+tasks stop when their components close. A shared Tokio runtime stops after its last
+component releases it. Each activation creates fresh
+component state. Each library catches panics from its own callbacks. Foreign
+wakers and destructors must not panic.
+
+## Verification
+
+The binary compatibility tests build fixtures in separate Cargo workspaces with
+their own lockfiles. They check the current v1.0 schema, required minor and major
+versions, missing modules, changed signatures and marker traits, and mismatched
+descriptors. Obsolete development layouts are not a supported compatibility path.
+
+Run `just build-native-abi-test-fixtures` to prepare these binaries. Use
+`just build-test-plugin-fixtures` for host and SDK tests. `just test-rust`
+prepares both fixture sets and runs the Rust suite.
+
+Static manifest validation reports the declared API and host support. Activation
+also checks binary layouts. Only the running process can report which libraries
+are loaded and which components are active.

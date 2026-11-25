@@ -1,0 +1,502 @@
+---
+title: "Scopes"
+description: "Understand scope hierarchy, lifetime, cleanup, and concurrent isolation."
+position: 1
+---
+import { MermaidStyles } from "@/components/MermaidStyles";
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page explains how scope stacks establish ownership, parentage, cleanup, and
+isolation.
+
+## Why Scopes Exist
+
+Scopes track where work belongs in NeMo Relay. Every tool call, LLM call, and
+mark event attaches to a scope hierarchy.
+
+That hierarchy lets the runtime:
+
+- Model nested agent work
+- Preserve parent-child relationships
+- Expose scope-local middleware and subscribers
+- Clean up scope-owned runtime state automatically
+- Isolate concurrent work
+
+## What a Scope Represents
+
+A scope represents a logical unit of work such as:
+
+- An agent run
+- A request
+- A workflow step
+- A background task
+- A nested function or tool workflow
+
+Scopes are not just labels. They determine event parentage and which local
+middleware and subscribers are visible.
+
+## Scope Hierarchy and Ownership
+
+Scopes form a tree. A child scope inherits the active context from its
+parent and contributes new nested work beneath it.
+
+That hierarchy determines:
+
+- Event parentage
+- Lifetime boundaries
+- Scope-local middleware visibility
+- Scope-local subscriber visibility
+
+## Scope Types
+
+NeMo Relay includes standard scope types for common runtime semantics, including:
+
+- `Agent`
+- `Function`
+- `Tool`
+- `Llm`
+- `Retriever`
+- `Embedder`
+- `Reranker`
+- `Guardrail`
+- `Evaluator`
+- `Custom`
+- `Unknown`
+
+The specific type helps subscribers and downstream tracing systems understand
+what the scope represents semantically.
+
+## Scope Behavior
+
+These scope behaviors define how root, child, and scope-local runtime state interact.
+
+### Root Scope
+
+A root scope is always present. Other scopes are pushed beneath that root as
+work becomes more specific.
+
+### Parent-Child Relationships
+
+Nested scopes create the ownership tree used by emitted events. Tool and LLM
+calls then attach beneath the active scope.
+
+### Scope Lifetimes
+
+Scopes have explicit lifetime boundaries. A scope starts when it becomes active
+and ends when it is popped or closed.
+
+### Replay Timestamps
+
+You can pass timestamps to scope push and pop operations to replay events.
+Python `datetime` values must include a time zone. Agent Trajectory Observability
+Format (ATOF) events keep the supplied timestamp.
+
+OpenTelemetry traces and logs encode timestamps as unsigned 64-bit nanoseconds
+since the Unix epoch. Their supported range is `1970-01-01T00:00:00Z` through
+`2554-07-21T23:34:33.709551615Z`, inclusive. The trace and log subscribers drop
+events outside this range and report an `otel.timestamp_out_of_range` runtime
+diagnostic. The scope operation still completes, and ATOF keeps the original
+timestamp. On Windows, trace and log timestamps have 100-nanosecond precision.
+
+A dropped start event creates no trace span. A dropped end event does not close
+an existing span. A later valid end event can close it. A dropped mark creates
+no span event, standalone span, or log record.
+
+### Scope-Local Cleanup
+
+Scope-local middleware and subscribers are tied to the owning scope lifecycle.
+When the scope closes, those registrations disappear automatically.
+
+## Worked Scope Lifetime
+
+Consider an agent that calls one tool and then one LLM:
+
+1. The application or framework integration pushes an `Agent` scope beneath the
+   root and emits its start event.
+2. The application registers middleware and a subscriber on the agent scope.
+   Both are visible while the agent or any of its nested scopes are active.
+3. A managed tool wrapper emits the tool start event, runs the tool, and emits
+   the tool end event. The agent remains the active scope.
+4. The application emits a mark under the active agent scope. The mark does not
+   change the stack.
+5. A managed LLM wrapper emits the LLM start event, runs the model call, and
+   emits the LLM end event. The agent remains the active scope.
+6. The application or framework integration emits the agent end event and pops
+   the agent scope. Its local
+   middleware and subscriber are removed.
+
+The active scope stack changes over time. The emitted events remain in a
+parent-linked tree after their scopes close. A mark event attaches beneath the
+active scope but does not push another scope onto the stack.
+
+<MermaidStyles />
+
+```mermaid
+flowchart LR
+  subgraph Stack["Active scope stack over time"]
+    direction LR
+    s1["root → agent<br/>agent starts"] --> s2["root → agent<br/>tool lifecycle emits"]
+    s2 --> s3["root → agent<br/>mark emits"]
+    s3 --> s4["root → agent<br/>LLM lifecycle emits"]
+    s4 --> s5["root<br/>agent closes"]
+  end
+
+  subgraph Events["Emitted event tree"]
+    direction TB
+    root["root"] --> agent["agent start/end"]
+    agent --> tool["tool start/end"]
+    agent --> mark["mark"]
+    agent --> llm["llm start/end"]
+  end
+```
+
+Agent-local middleware and subscribers are visible during the first four stack
+states. They are no longer visible after the agent scope closes.
+
+## Semantic Payloads
+
+Scopes may expose semantic `input` and `output` payloads on their emitted start
+and end events.
+
+### Scope Input
+
+Use scope `input` when the scope itself represents a request-style or task-style
+unit of work whose starting payload matters semantically.
+
+### Scope Output
+
+Use scope `output` when the scope itself produces a meaningful semantic result.
+
+Those payloads live on the emitted events rather than on the scope handle
+itself.
+
+## Context Isolation
+
+Context isolation keeps concurrent requests, tenants, and agents from sharing scope-
+local state accidentally.
+
+Choose the context behavior based on whether the work belongs to the same
+logical trace and whether it runs concurrently:
+
+| Work | Context Behavior |
+| --- | --- |
+| Sequential nested work in the same trace | Reuse the active stack |
+| Concurrent branches in the same trace | Fork the stack for each branch |
+| Independent work | Start with a fresh isolated stack |
+| Same-trace work crossing a process boundary | Carry Relay propagation context. Scope-local registrations do not cross the boundary. |
+| Independent work crossing a process boundary | Start with a fresh isolated stack instead of importing context |
+
+### Why Isolation Matters
+
+Concurrent requests must not share the same active scope stack accidentally.
+Otherwise:
+
+- Unrelated work can appear under the wrong parent
+- Scope-local middleware can leak across requests
+- Scope-local subscribers can observe the wrong execution tree
+
+## Reuse an Existing Logical Trace
+
+Reuse or propagate the active scope stack when detached work should continue the
+same logical request or agent trace.
+
+Use this when:
+
+- Worker events should appear under the same parent request
+- Scope-local middleware from the parent should still apply
+- Subscribers should observe one continuous execution tree
+
+## Start a Fresh Isolated Context
+
+Create and bind a fresh stack when detached work should be independent.
+
+Use this when:
+
+- The worker is a separate job rather than part of the parent trace
+- The boundary cannot safely carry a native stack handle
+- You want a clean root scope with isolated scope-local registrations
+
+### Fork Concurrent Work
+
+Use Python's `fork_scope_stack()` or Node.js's `forkScopeStack()` to copy the
+active local stack before starting concurrent work. Each copy retains the
+original scope UUIDs, types, and ancestry, along with its managed event,
+tracing, and event-publication context. Creating a copy does not bind it or emit
+scope start/end events. Capture requires an active Relay context.
+
+Scope-local registration membership is copied at capture time. Later membership
+changes remain local to each stack; the registered callback objects retain
+their existing shared state.
+
+Give each concurrent operation its own copy. Keep inherited scopes open until
+all operations finish, including operations that fail. Consume and close streams
+inside the bound operation. Returning a lazy stream for later consumption does
+not extend the operation's context lifetime. Copying a stack reconstructed from
+propagation metadata preserves that reconstructed stack; it cannot recover
+ancestry that was already lost.
+
+The existing Rust `fork_scope_stack()` and Python `fork_asyncio_context()`
+helpers reconstruct a stack from propagation metadata. They preserve the
+immediate parent and tracing context, and omit scope-local registrations.
+
+<Tabs>
+<Tab title="Python" language="python">
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+import nemo_relay
+
+def worker(stack: nemo_relay.ScopeStack, name: str) -> None:
+    with nemo_relay.use_scope_stack(stack):
+        with nemo_relay.scope.scope(name, nemo_relay.ScopeType.Function):
+            nemo_relay.scope.event("checkpoint")
+
+def main() -> None:
+    with nemo_relay.scope.scope("parent", nemo_relay.ScopeType.Agent):
+        first_stack = nemo_relay.fork_scope_stack()
+        second_stack = nemo_relay.fork_scope_stack()
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(worker, first_stack, "first"),
+                executor.submit(worker, second_stack, "second"),
+            ]
+            for future in futures:
+                future.result()
+```
+
+The executor waits for both workers before the parent scope exits, including
+when a worker raises. The same `use_scope_stack()` helper can bind a copy inside
+an asyncio task.
+
+</Tab>
+<Tab title="Rust" language="rust">
+
+This propagation-based helper preserves parentage and tracing. It does not copy
+the original typed hierarchy or scope-local registrations.
+
+<Code src="_code/fork_task.rs" language="rust" />
+
+</Tab>
+<Tab title="Node.js" language="javascript">
+
+Call this helper inside the parent Agent scope. `withScopeStack()` restores the
+calling context immediately and keeps each branch's copy active until its
+returned Promise settles.
+
+```javascript
+import { forkScopeStack, withScopeStack } from "nemo-relay-node";
+
+export async function runConcurrentOperations(firstOperation, secondOperation) {
+  const firstStack = forkScopeStack();
+  const secondStack = forkScopeStack();
+  return await Promise.allSettled([
+    Promise.resolve().then(() => withScopeStack(firstStack, firstOperation)),
+    Promise.resolve().then(() => withScopeStack(secondStack, secondOperation)),
+  ]);
+}
+```
+
+Inspect both returned outcomes before closing the parent scope. `allSettled()`
+waits for both operations even when one throws or rejects.
+
+`setThreadScopeStack()` mutates the current thread or async resource. Do not use
+it to isolate concurrent branches that begin in the same synchronous callback.
+
+Installing a forked stack with `setThreadScopeStack()` requires an active
+JavaScript callback context. Outside that context, the call throws without
+changing the current binding; use `withScopeStack()` instead.
+
+</Tab>
+</Tabs>
+
+## Cross-Process Propagation
+
+When work crosses a process or remote-workflow boundary, applications can carry
+the versioned Relay propagation context instead of a native stack handle. The
+context contains an immediate `parent_uuid` and an optional `root_uuid`.
+Rooted contexts carry a root UUID. Explicit rootless contexts carry `None`.
+By default, Relay uses the propagated root or the first local Agent scope as
+that root.
+
+The receiver creates a fresh isolated stack from that context and installs it
+only for request handling. Its first local event becomes a child of
+`parent_uuid`. Relay does not transfer scope-local middleware or subscribers.
+The transport is application-owned: authenticate and authorize inbound context
+before importing it. Relay does not send headers, make IPC connections, or
+trust remote identifiers automatically.
+
+The default `capture_propagation_context()` API preserves Relay event parentage
+and includes the exact active OpenTelemetry context when one is available. When
+no valid W3C parent is available, Relay can reconstruct a Relay-derived trace
+from the root UUID. An explicit rootless context stays rootless until a local
+Agent scope establishes a new root. Rootless capture omits W3C context derived
+from the sender's local scope, so importing a locally captured rootless context
+starts a separate OpenTelemetry trace.
+`capture_propagation_context_with_root()` lets an application choose a stable
+run UUID explicitly.
+
+Relay's JSON context can also carry optional W3C `traceparent` and
+`tracestate` fields. With a valid `traceparent`, the first local OpenTelemetry
+span is a child of the upstream span and keeps its trace ID and sampling flag.
+Relay keeps its UUID lineage unchanged.
+
+Relay drops invalid W3C fields and logs a warning without rejecting the Relay
+context. If only `tracestate` is invalid, Relay keeps the valid `traceparent`.
+Valid vendor state keeps its member order. Each value must contain 1 to 256
+printable ASCII characters. Keys must be unique, and the list can contain at
+most 32 members. Relay rejects values with control characters, such as carriage
+returns and newlines.
+
+For outbound-only W3C propagation, use `capture_traceparent()`
+(`captureTraceparent()` in Node.js) to obtain the current Relay traceparent
+directly, or convert a `PropagationContext`
+with `PropagationContext::to_traceparent` (and the equivalent binding methods).
+Capture requires an active Relay scope or a valid imported trace context.
+It does not require an exporter or collector. A managed LLM call closes its
+LLM scope before returning. Its completed span does not remain the current
+context. Without an enclosing active scope or imported context, capture
+returns an error.
+
+In these examples, the managed LLM call has finished when capture runs, but
+the enclosing Agent scope is still active:
+
+<Tabs>
+<Tab title="Python" language="python">
+
+```python
+from nemo_relay import ScopeType, capture_traceparent, llm, scope
+
+
+async def run_agent(request, provider):
+    with scope.scope("agent-run", ScopeType.Agent):
+        result = await llm.execute("provider", request, provider)
+        # The LLM scope has closed. The Agent scope is still active.
+        agent_traceparent = capture_traceparent()
+        return result, agent_traceparent
+```
+
+</Tab>
+<Tab title="Rust" language="rust">
+
+<Code src="_code/run_agent.rs" language="rust" />
+
+</Tab>
+<Tab title="Node.js" language="javascript">
+
+```javascript
+const {
+  ScopeType,
+  captureTraceparent,
+  llmCallExecuteAsync,
+  withScope,
+} = require("nemo-relay-node");
+
+async function runAgent(request, provider) {
+  return withScope("agent-run", ScopeType.Agent, async () => {
+    const result = await llmCallExecuteAsync("provider", request, provider);
+    // The LLM scope has closed. The Agent scope is still active.
+    const agentTraceparent = captureTraceparent();
+    return { result, agentTraceparent };
+  });
+}
+```
+
+</Tab>
+</Tabs>
+
+Each example captures the enclosing Agent context. To retain the LLM context instead,
+capture it inside the provider callback while the managed LLM scope is active
+and save that value for later propagation.
+
+When a W3C context was imported upstream, rootless capture preserves that
+context and the receiver continues the upstream trace. To require a new trace
+even then, remove `traceparent` and `tracestate` before importing the context.
+Managed LLM execution automatically replaces both
+runtime-owned `traceparent` and `tracestate` headers on the provider request.
+A standalone request-intercept call adds the same pair only when a real Relay
+trace context exists.
+
+Use the binding's JSON helpers at the transport boundary: Rust
+`PropagationContext::to_json` and `PropagationContext::from_json`, Python
+`context.to_json()` and `PropagationContext.from_json(...)`, Go
+`context.ToJSON()` and `PropagationContextFromJSON(...)`, or Node.js
+`propagationContextToJson(...)` and `propagationContextFromJson(...)`. The
+helpers validate the version and UUIDs before a context is imported.
+
+## Inspect the Visible Stack
+
+Use `current_scope_stack_snapshot()` in Rust/Python or
+`currentScopeStackSnapshot()` in Node.js to read owned scope identities. The
+snapshot contains `scopes` ordered from the implicit root to the current top.
+Each entry contains the actual scope UUID and existing semantic scope type.
+Repeated reads retain those UUIDs; later push/pop operations leave earlier
+snapshots unchanged.
+
+Inspection returns `None` or `null` when no context is explicitly bound and
+creates no stack. An explicitly bound root-only stack returns its root entry.
+Python reads the calling task's context variable; Node.js reads the current
+asynchronous callback binding; Rust resolves override, task, then explicit
+thread bindings. Concurrent agents need separate bound stacks.
+
+Within an application-owned Agent scope, select the nearest Agent entry for
+correlation across LLM and tool callbacks:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+
+snapshot = nemo_relay.current_scope_stack_snapshot()
+agent_scope_uuid = next(
+    (entry.scope_id for entry in reversed(snapshot.scopes)
+     if entry.scope_type == nemo_relay.ScopeType.Agent),
+    None,
+) if snapshot is not None else None
+# Correlate callbacks that share this Agent using (agent_scope_uuid, tool_call_id).
+```
+</Tab>
+<Tab title="Rust" language="rust">
+<Code src="_code/correlate_agent.rs" language="rust" />
+</Tab>
+<Tab title="Node.js" language="javascript">
+```javascript
+const { currentScopeStackSnapshot, ScopeType } = require('nemo-relay-node');
+
+const snapshot = currentScopeStackSnapshot();
+const agentScopeUuid = snapshot?.scopes.findLast(
+  (entry) => entry.scopeType === ScopeType.Agent,
+)?.scopeId ?? null;
+// Correlate callbacks that share this Agent using [agentScopeUuid, toolCallId].
+```
+</Tab>
+</Tabs>
+
+An Agent UUID identifies that scope's lifetime. The visible list includes
+synthetic propagation entries with their stored types, including `Unknown`.
+A rootless imported parent appears as a synthetic Agent root; its Agent type
+alone does not identify a known upstream Agent. The snapshot describes visible
+runtime entries, not a complete distributed ancestry or persistent session ID.
+Managed tool/LLM event identities maintained separately from lexical scopes
+are not added to this list. Callback reads reflect the stack restored at that
+callback boundary, including continuation and streaming polls.
+
+Native and worker plugins expose the same value contract through their
+[runtime scope APIs](/build-plugins/native/runtime-events-and-scopes) and
+[worker scope APIs](/build-plugins/workers/runtime-events-and-scopes).
+
+## Practical Guidance
+
+Use these practices when applying the concept in application or integration code.
+
+- Push a top-level scope at the entry point of a request, workflow, or agent
+  run.
+- Let nested helpers attach work beneath that scope whenever possible.
+- Use scope-local registrations when the behavior should disappear with the
+  owning scope.
+- Emit mark events for retries, checkpoints, interrupts, or state transitions
+  that are important for debugging but are not full spans.
+- Prefer explicit isolation decisions when work crosses thread, task, or worker
+  boundaries.

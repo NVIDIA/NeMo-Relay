@@ -1,0 +1,23 @@
+---
+title: "Module limits"
+sidebar-title: "limits"
+description: "Bounds used by native diagnostic authoring and host admission. Native diagnostic admission limits."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Bounds used by native diagnostic authoring and host admission. Native diagnostic admission limits.
+
+## Constants
+
+- [CONTRACT_VERSION](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/limits/constant-contract-version): Typed diagnostic transport revision.
+- [MAX_CALLS](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/limits/constant-max-calls): Maximum concurrent native data calls per host process.
+- [MAX_CLASSES](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/limits/constant-max-classes): Maximum classes per extension.
+- [MAX_CODES](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/limits/constant-max-codes): Maximum declared codes per component.
+- [MAX_COMPONENTS](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/limits/constant-max-components): Maximum simultaneously live component registrations per activation.
+- [MAX_EXTENSIONS](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/limits/constant-max-extensions): Maximum cumulative extension declarations per activation.
+- [MAX_REQUEST_BYTES](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/limits/constant-max-request-bytes): Maximum total text bytes in a native request.
+- [MAX_SESSIONS](/reference/api/rust-library-reference/nemo-relay-plugin/diagnostics/limits/constant-max-sessions): Maximum concurrently admitted authoring sessions per host process.
