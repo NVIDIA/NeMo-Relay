@@ -14,6 +14,9 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use nemo_relay_codecs::anthropic::{AnthropicMessagesCodec, AnthropicMessagesStreamingCodec};
+use nemo_relay_codecs::gemini_generate_content::{
+    GeminiGenerateContentCodec, GeminiGenerateContentStreamingCodec,
+};
 use nemo_relay_codecs::openai_chat::{OpenAIChatCodec, OpenAIChatStreamingCodec};
 use nemo_relay_codecs::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
 use nemo_relay_model_pricing::{
@@ -1037,6 +1040,221 @@ async fn chat_streams_record_provider_errors_and_preserve_partial_output() {
         3
     );
     deregister_subscriber("chat_stream_errors").unwrap();
+}
+
+#[tokio::test]
+async fn gemini_stream_validation_checks_completion_before_collection() {
+    let partial =
+        json!({"candidates": [{"index": 0, "content": {"parts": [{"text": "Partial"}]}}]});
+    let finish = |reason: &str| json!({"candidates": [{"index": 0, "finishReason": reason}]});
+    let blocked = json!({"promptFeedback": {"blockReason": "SAFETY"}});
+    for (chunks, complete) in [
+        (vec![], false),
+        (vec![partial.clone()], false),
+        (vec![finish("")], false),
+        (vec![finish("FINISH_REASON_UNSPECIFIED")], false),
+        (vec![partial.clone(), finish("STOP")], true),
+        (vec![finish("MAX_TOKENS")], true),
+        (vec![finish("SAFETY")], true),
+        (vec![finish("future_reason")], true),
+        (vec![blocked.clone()], true),
+        (vec![blocked, partial], false),
+        (
+            vec![json!({"promptFeedback": {"blockReason": "BLOCK_REASON_UNSPECIFIED"}})],
+            false,
+        ),
+        (
+            vec![json!({"promptFeedback": {"safetyRatings": []}})],
+            false,
+        ),
+        (
+            vec![
+                finish("STOP"),
+                json!({"candidates": [{"index": 0, "safetyRatings": []}]}),
+                json!({"usageMetadata": {"totalTokenCount": 11}}),
+            ],
+            true,
+        ),
+    ] {
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+            stream: Box::pin(tokio_stream::iter(chunks.clone().into_iter().map(Ok))),
+            close_calls: Arc::clone(&close_calls),
+            close_error: None,
+            closed: false,
+        });
+        // Middleware can drain the validated source before the collector receives its events.
+        let mut stream = GeminiGenerateContentStreamingCodec::new().validate_stream(source);
+        for chunk in &chunks {
+            assert_eq!(&stream.next().await.unwrap().unwrap(), chunk);
+        }
+        let terminal = stream.next().await;
+        if complete {
+            assert!(terminal.is_none(), "{chunks:?}: {terminal:?}");
+        } else {
+            assert!(
+                matches!(terminal, Some(Err(FlowError::Internal(message)))
+                if message == "Gemini stream ended before the response finished"),
+                "{chunks:?}"
+            );
+        }
+        assert!(stream.next().await.is_none());
+        stream.close().await.unwrap();
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    }
+
+    for tail in [
+        LlmJsonStream::new(tokio_stream::pending()),
+        make_stream(vec![Err(FlowError::Internal(
+            "later transport error".into(),
+        ))]),
+    ] {
+        let event = json!({"error": {"status": "INTERNAL", "message": "Unavailable"}});
+        let source = LlmJsonStream::new(tokio_stream::iter(vec![Ok(event.clone())]).chain(tail));
+        let mut stream = GeminiGenerateContentStreamingCodec::new().validate_stream(source);
+        assert_eq!(stream.next().await.unwrap().unwrap(), event);
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(matches!(Pin::new(&mut stream).poll_next(&mut cx),
+            Poll::Ready(Some(Err(FlowError::Internal(message))))
+            if message == "Gemini stream reported INTERNAL: Unavailable"));
+        assert!(stream.next().await.is_none());
+    }
+
+    let mut stream =
+        GeminiGenerateContentStreamingCodec::new().validate_stream(make_stream(vec![Err(
+            FlowError::Internal("transport failed".into()),
+        )]));
+    assert!(
+        matches!(stream.next().await, Some(Err(FlowError::Internal(message)))
+        if message == "transport failed")
+    );
+    assert!(stream.next().await.is_none());
+
+    let mut stream = GeminiGenerateContentStreamingCodec::new()
+        .validate_stream(LlmJsonStream::new(tokio_stream::pending()));
+    stream.close().await.unwrap();
+    assert!(stream.next().await.is_none());
+
+    let mut stream = GeminiGenerateContentStreamingCodec::new()
+        .validate_stream(LlmJsonStream::new(tokio_stream::pending()));
+    stream.terminalize();
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn gemini_stream_failures_preserve_partial_output_and_cleanup() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    for borrowed in [false, true] {
+        for (partial, early_eof) in [(false, false), (true, false), (false, true), (true, true)] {
+            reset_global();
+            let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+            let captured = Arc::clone(&events);
+            register_subscriber(
+                "gemini_stream_errors",
+                Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+            )
+            .unwrap();
+
+            let codec = Arc::new(GeminiGenerateContentStreamingCodec::new());
+            let source_codec = Arc::clone(&codec);
+            let partial_chunk = json!({
+                "candidates": [{"index": 0, "content": {"parts": [{"text": "Partial"}]}}],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1}
+            });
+            let mut chunks = Vec::new();
+            if partial {
+                chunks.push(Ok(partial_chunk.clone()));
+            }
+            if !early_eof {
+                chunks.push(Ok(json!({"error": {
+                    "code": 500, "status": "INTERNAL", "message": "Internal error encountered."
+                }})));
+            }
+            let close_calls = Arc::new(AtomicUsize::new(0));
+            let source_close_calls = Arc::clone(&close_calls);
+            let mut stream = llm_stream_call_execute(
+                LlmStreamCallExecuteParams::builder()
+                    .name("gemini.generate_content")
+                    .request(LlmRequest {
+                        headers: Default::default(),
+                        content: json!({}),
+                    })
+                    .func(Arc::new(move |_| {
+                        let chunks = chunks.clone();
+                        let close_calls = Arc::clone(&source_close_calls);
+                        let codec = Arc::clone(&source_codec);
+                        Box::pin(async move {
+                            let tail = if early_eof {
+                                make_stream(vec![])
+                            } else {
+                                LlmJsonStream::new(tokio_stream::pending())
+                            };
+                            Ok(codec.validate_stream(LlmJsonStream::from_closeable(
+                                CloseTrackingStream {
+                                    // An explicit error must not wait for a stalled source to end.
+                                    stream: Box::pin(tokio_stream::iter(chunks).chain(tail)),
+                                    close_calls,
+                                    close_error: None,
+                                    closed: false,
+                                },
+                            )))
+                        })
+                    }))
+                    .collector(codec.collector())
+                    .borrowed_collector_opt(if borrowed {
+                        codec.borrowed_collector()
+                    } else {
+                        None
+                    })
+                    .finalizer(codec.finalizer())
+                    .response_codec(Arc::new(GeminiGenerateContentCodec))
+                    .build(),
+            )
+            .await
+            .unwrap();
+            if partial {
+                assert_eq!(stream.next().await.unwrap().unwrap(), partial_chunk);
+            }
+            let error = tokio::time::timeout(Duration::from_secs(1), stream.next())
+                .await
+                .expect("stream failure must not wait for more input")
+                .unwrap()
+                .expect_err("stream failure must fail the call");
+            assert!(matches!(&error, FlowError::Internal(_)));
+            assert_eq!(
+                error.to_string(),
+                FlowError::Internal(if early_eof {
+                    "Gemini stream ended before the response finished".into()
+                } else {
+                    "Gemini stream reported INTERNAL (500): Internal error encountered.".into()
+                })
+                .to_string()
+            );
+            assert!(stream.next().await.is_none());
+            stream.close().await.unwrap();
+            stream.close().await.unwrap();
+            assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+
+            let captured = captured_snapshot(&events);
+            let ends: Vec<_> = captured.iter().filter(|event| is_llm_end(event)).collect();
+            assert_eq!(ends.len(), 1);
+            let end = ends[0];
+            let metadata = end.metadata().unwrap();
+            assert_eq!(metadata["otel.status_code"], "ERROR");
+            assert_eq!(metadata["otel.status_description"], error.to_string());
+            let response = end.annotated_response().unwrap();
+            if partial {
+                assert_eq!(response.response_text().as_deref(), Some("Partial"));
+                let usage = response.usage.as_ref().unwrap();
+                assert_eq!(usage.prompt_tokens, Some(10));
+                assert_eq!(usage.completion_tokens, Some(1));
+            } else {
+                assert!(response.message.is_none());
+                assert!(response.usage.is_none());
+            }
+            deregister_subscriber("gemini_stream_errors").unwrap();
+        }
+    }
 }
 
 /// The built-in collector rejects early EOF and forwards producer cleanup.

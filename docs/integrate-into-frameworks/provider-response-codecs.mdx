@@ -64,6 +64,15 @@ reasons and safety ratings. A blocked prompt with no generated candidates stays
 without candidates; buffered and aggregated responses both normalize its block
 reason to `content_filter` when applicable.
 
+Gemini's owned and borrowed streaming collectors reject top-level JSON `error`
+objects with the provider's status, code, and message when available. Use its
+`validate_stream` hook to also reject empty streams and streams that end before
+the candidate has a `finishReason`. Prompt blocks reported through
+`promptFeedback.blockReason` can finish without a candidate. Token-limit and
+safety finish reasons remain valid completions, and trailing usage or metadata
+does not reset completion. In either failure case, managed streams record
+`ERROR` and retain previously collected output and usage.
+
 OpenAI Chat streaming aggregation retains `system_fingerprint` and `service_tier`
 and concatenates each choice's text and refusal logprob entries in arrival order.
 These fields remain available through `api_specific` after response decoding.

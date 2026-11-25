@@ -2155,6 +2155,29 @@ fn test_encode_system_instruction_edit() {
 // ===================================================================
 
 #[test]
+fn test_streaming_error_with_missing_or_invalid_fields_returns_provider_failure() {
+    for (error, expected) in [
+        (json!({}), "Gemini stream reported error: stream failed"),
+        (
+            json!({"code": 503, "message": "Unavailable"}),
+            "Gemini stream reported error (503): Unavailable",
+        ),
+        (
+            json!({"status": "INTERNAL"}),
+            "Gemini stream reported INTERNAL: stream failed",
+        ),
+        (
+            json!({"code": {}, "status": [], "message": false, "details": ["private detail"]}),
+            "Gemini stream reported error: stream failed",
+        ),
+    ] {
+        let codec = GeminiGenerateContentStreamingCodec::new();
+        let result = codec.collector()(json!({"error": error}));
+        assert!(matches!(result, Err(FlowError::Internal(message)) if message == expected));
+    }
+}
+
+#[test]
 fn test_streaming_prompt_feedback_matches_buffered_decoding() {
     for with_candidate in [false, true] {
         let feedback = json!({

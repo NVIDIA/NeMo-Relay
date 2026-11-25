@@ -12,12 +12,18 @@
 //! rejected because their function responses cannot be correlated safely.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use serde::Deserialize;
+use tokio_stream::Stream;
 
 use nemo_relay_types::Json;
 use nemo_relay_types::api::llm::LlmRequest;
-use nemo_relay_types::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use nemo_relay_types::api::runtime::{
+    BuiltinLlmCodec, LlmCodecIdentity, LlmJsonStream, LlmStreamInner,
+};
 use nemo_relay_types::error::{FlowError, Result};
 
 use super::request::{
@@ -2941,6 +2947,8 @@ fn patch_extra_fields(
 ///
 /// Accumulates Gemini server-sent event chunks and assembles a complete response
 /// that [`GeminiGenerateContentCodec::decode_response`] can consume.
+/// Use [`StreamingCodec::validate_stream`](nemo_relay_types::codec::streaming::StreamingCodec::validate_stream)
+/// to reject streams that end before a finish reason or a prompt block is received.
 pub struct GeminiGenerateContentStreamingCodec {
     state: std::sync::Arc<std::sync::Mutex<GeminiGenerateContentStreamingState>>,
 }
@@ -2963,6 +2971,16 @@ impl Default for GeminiGenerateContentStreamingCodec {
 }
 
 impl nemo_relay_types::codec::streaming::StreamingCodec for GeminiGenerateContentStreamingCodec {
+    fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
+        LlmJsonStream::from_closeable(GeminiCompletionStream {
+            inner: stream,
+            provider_error: None,
+            candidate_finished: None,
+            prompt_blocked: false,
+            ended: false,
+        })
+    }
+
     fn collector(&self) -> nemo_relay_types::api::runtime::LlmCollectorFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move |event: Json| -> Result<()> {
@@ -2993,6 +3011,93 @@ impl nemo_relay_types::codec::streaming::StreamingCodec for GeminiGenerateConten
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             std::mem::take(&mut *guard).finalize()
         })
+    }
+}
+
+struct GeminiCompletionStream {
+    inner: LlmJsonStream,
+    provider_error: Option<FlowError>,
+    // The collector supports one candidate. Track source events before middleware can read ahead.
+    candidate_finished: Option<bool>,
+    prompt_blocked: bool,
+    ended: bool,
+}
+
+impl Stream for GeminiCompletionStream {
+    type Item = Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.ended {
+            return Poll::Ready(None);
+        }
+        if let Some(error) = this.provider_error.take() {
+            this.ended = true;
+            return Poll::Ready(Some(Err(error)));
+        }
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(event))) => {
+                if let Some(error) = event.get("error").filter(|error| error.is_object()) {
+                    this.provider_error = Some(gemini_stream_error(error));
+                } else {
+                    if let Some(candidate) = event
+                        .get("candidates")
+                        .and_then(Json::as_array)
+                        .and_then(|candidates| candidates.first())
+                    {
+                        let finished = this.candidate_finished.get_or_insert(false);
+                        *finished |= candidate
+                            .get("finishReason")
+                            .and_then(Json::as_str)
+                            .is_some_and(|reason| {
+                                !reason.is_empty() && reason != "FINISH_REASON_UNSPECIFIED"
+                            });
+                    }
+                    this.prompt_blocked |= event
+                        .pointer("/promptFeedback/blockReason")
+                        .and_then(Json::as_str)
+                        .is_some_and(|reason| {
+                            !reason.is_empty() && reason != "BLOCK_REASON_UNSPECIFIED"
+                        });
+                }
+                Poll::Ready(Some(Ok(event)))
+            }
+            Poll::Ready(None) => {
+                this.ended = true;
+                if this.candidate_finished.unwrap_or(this.prompt_blocked) {
+                    Poll::Ready(None)
+                } else {
+                    log::warn!(
+                        target: "nemo_relay.runtime",
+                        event = "llm_stream_incomplete",
+                        reason = "missing_finish_reason";
+                        "Gemini stream ended before the response finished"
+                    );
+                    Poll::Ready(Some(Err(FlowError::Internal(
+                        "Gemini stream ended before the response finished".into(),
+                    ))))
+                }
+            }
+            Poll::Ready(Some(Err(error))) => {
+                this.ended = true;
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl LlmStreamInner for GeminiCompletionStream {
+    fn terminalize(self: Pin<&mut Self>) {
+        let this = self.get_mut();
+        this.ended = true;
+        this.inner.terminalize();
+    }
+
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.ended = true;
+        Box::pin(this.inner.close())
     }
 }
 
@@ -3042,6 +3147,9 @@ impl GeminiGenerateContentStreamingState {
     }
 
     fn observe(&mut self, event: &Json) -> Result<()> {
+        if let Some(error) = event.get("error").filter(|error| error.is_object()) {
+            return Err(gemini_stream_error(error));
+        }
         if let Some(candidates) = event.get("candidates").and_then(Json::as_array) {
             self.observe_candidate(candidates)?;
         }
@@ -3291,6 +3399,24 @@ impl GeminiGenerateContentStreamingState {
         }
         Json::Object(output)
     }
+}
+
+fn gemini_stream_error(error: &Json) -> FlowError {
+    let status = error
+        .get("status")
+        .and_then(Json::as_str)
+        .unwrap_or("error");
+    let code = error
+        .get("code")
+        .and_then(Json::as_i64)
+        .map(|code| format!(" ({code})"))
+        .unwrap_or_default();
+    let message = error
+        .get("message")
+        .and_then(Json::as_str)
+        .unwrap_or("stream failed");
+    // A provider failure after partial output must not trigger an automatic retry.
+    FlowError::Internal(format!("Gemini stream reported {status}{code}: {message}"))
 }
 
 fn gemini_streamed_call_differs(active: Option<&str>, fragment: Option<&str>) -> bool {
