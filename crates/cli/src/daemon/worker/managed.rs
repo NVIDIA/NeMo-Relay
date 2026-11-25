@@ -1464,16 +1464,22 @@ impl ObservationReceiver {
         let signal = Arc::clone(&self.signal);
         let status = self.status;
         // HTTP rejection bodies can be ordinary JSON even for streaming requests.
-        let value = if streaming && status.is_success() {
+        let result = if streaming && status.is_success() {
             self.finish_stream(surface).await
         } else {
-            self.finish_buffered().await
+            Ok(self.finish_buffered().await)
         };
         let terminal = signal.wait().await;
-        let truncated = signal.truncated.load(Ordering::Acquire);
+        let (value, stream_failure) = match result {
+            Ok(value) => (value, None),
+            Err(error) => (None, Some(error.to_string())),
+        };
+        let truncated = signal.truncated.load(Ordering::Acquire)
+            || (terminal == OBSERVATION_COMPLETE && stream_failure.is_some());
         let failure = match terminal {
             // A transport failure is more specific than capture or HTTP errors.
             OBSERVATION_BODY_ERROR => Some("provider response body failed".to_owned()),
+            OBSERVATION_COMPLETE if stream_failure.is_some() => stream_failure,
             OBSERVATION_COMPLETE if truncated => {
                 Some("provider response observation was truncated".to_owned())
             }
@@ -1505,7 +1511,7 @@ impl ObservationReceiver {
         serde_json::from_slice(&bytes).ok()
     }
 
-    async fn finish_stream(mut self, surface: ProviderSurface) -> Option<Value> {
+    async fn finish_stream(mut self, surface: ProviderSurface) -> Result<Option<Value>, FlowError> {
         let codec = streaming_codec(surface);
         let mut collector = codec.collector();
         let finalizer = codec.finalizer();
@@ -1533,8 +1539,11 @@ impl ObservationReceiver {
                             last_event_at = tokio::time::Instant::now();
                             yield Ok(event.data);
                         }
-                        Err(error) => {
-                            yield Err(error);
+                        Err(_) => {
+                            // Decoder errors can include raw response payloads.
+                            yield Err(FlowError::Internal(
+                                "provider response stream contained malformed SSE data".into(),
+                            ));
                             return;
                         }
                     }
@@ -1549,32 +1558,40 @@ impl ObservationReceiver {
                         yield Ok(event.data);
                     }
                     Ok(None) => {}
-                    Err(error) => yield Err(error),
+                    Err(_) => yield Err(FlowError::Internal(
+                        "provider response stream contained malformed SSE data".into(),
+                    )),
                 }
             }
         });
         let mut stream = codec.validate_stream(source);
-        let mut valid = true;
+        let mut result = Ok(());
         while let Some(event) = stream.next().await {
-            if event.and_then(&mut collector).is_err() {
-                valid = false;
+            result = match event {
+                Ok(event) => collector(event).map_err(|_| {
+                    // Collection errors can include unsanitized provider field values.
+                    FlowError::Internal(
+                        "provider response stream event could not be collected".into(),
+                    )
+                }),
+                Err(error) => Err(error),
+            };
+            if result.is_err() {
                 break;
             }
         }
-        if stream.close().await.is_err() {
-            valid = false;
+        // Capture loss can manufacture a completion error. Snapshot it before closing
+        // the receiver, which can itself make subsequent capture attempts fail.
+        let capture_truncated = signal.truncated.load(Ordering::Acquire);
+        let cleanup = stream.close().await.map_err(|_| {
+            FlowError::Internal("provider response observation cleanup failed".into())
+        });
+        if capture_truncated {
+            return Ok(None);
         }
-        // Closing the observation channel and recording delivery's outcome can race.
-        // Wait for that outcome before interpreting a missing completion event.
-        if !valid
-            && !matches!(
-                signal.wait().await,
-                OBSERVATION_CANCELLED | OBSERVATION_BODY_ERROR
-            )
-        {
-            signal.truncate();
-        }
-        (valid && !signal.truncated.load(Ordering::Acquire)).then(finalizer)
+        result?;
+        cleanup?;
+        Ok(Some(finalizer()))
     }
 
     async fn next_stream_chunk(

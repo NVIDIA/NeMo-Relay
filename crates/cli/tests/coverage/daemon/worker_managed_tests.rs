@@ -356,6 +356,58 @@ async fn stream_observation_validates_responses_completion_without_changing_deli
 }
 
 #[tokio::test]
+async fn stream_observation_preserves_provider_failure_details() {
+    for (surface, event, description) in [
+        (
+            ProviderSurface::OpenAIResponses,
+            json!({"type": "response.failed", "response": {
+                "id": "test", "status": "failed", "output": [],
+                "error": {"code": "server_error", "message": "Generation failed"}
+            }}),
+            "OpenAI Responses stream reported server_error: Generation failed",
+        ),
+        (
+            ProviderSurface::OpenAIChat,
+            json!({"error": {"code": 502, "message": "Provider disconnected"}}),
+            "OpenAI Chat stream reported 502: Provider disconnected",
+        ),
+        (
+            ProviderSurface::AnthropicMessages,
+            json!({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}),
+            "Anthropic stream reported overloaded_error: Overloaded",
+        ),
+    ] {
+        let wire = Bytes::from(format!("data: {event}\n\n"));
+        let tail = Bytes::from_static(b": keep-alive\n\n");
+        let frames = [
+            Ok::<_, Infallible>(Frame::data(wire.clone())),
+            Ok(Frame::data(tail.clone())),
+        ];
+        let (mut body, observation) = observe_body(
+            StreamBody::new(futures_util::stream::iter(frames)),
+            StatusCode::OK,
+            DEFAULT_OBSERVATION_CAPTURE_BYTES,
+            OperationalContext::new(),
+        );
+        assert_eq!(
+            body.frame().await.unwrap().unwrap().into_data().unwrap(),
+            wire,
+        );
+        let mut observation = Box::pin(observation.finish(surface, true));
+        // Validation stops observing before delivery forwards the remaining bytes.
+        assert!(futures_util::poll!(observation.as_mut()).is_pending());
+        assert_eq!(body.collect().await.unwrap().to_bytes(), tail);
+        let observed = observation.await;
+        assert_eq!(observed.metadata()["otel.status_code"], "ERROR");
+        assert_eq!(
+            observed.metadata()["otel.status_description"],
+            FlowError::Internal(description.into()).to_string(),
+        );
+        assert!(observed.value.is_none());
+    }
+}
+
+#[tokio::test]
 async fn stream_observation_preserves_http_rejection_with_json_body() {
     let expected = Bytes::from_static(br#"{"error":"busy"}"#);
     let (body, observation) = observe_body(
@@ -378,11 +430,41 @@ async fn stream_observation_preserves_http_rejection_with_json_body() {
 }
 
 #[tokio::test]
-async fn stream_observation_rejects_malformed_trailing_sse_frames() {
-    // A complete terminal event cannot hide a malformed final, unterminated frame.
-    let expected = Bytes::from_static(
-        b"data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\ndata: {broken",
-    );
+async fn stream_observation_reports_malformed_sse_without_payloads() {
+    // A final response cannot hide malformed data, with or without an SSE terminator.
+    for ending in ["", "\n\n"] {
+        let expected = Bytes::from(format!(
+            "data: {{\"type\":\"response.completed\",\"response\":{{\"output\":[]}}}}\n\ndata: {{\"secret\":\"do-not-publish\"{ending}",
+        ));
+        let (body, observation) = observe_body(
+            Full::new(expected.clone()),
+            StatusCode::OK,
+            DEFAULT_OBSERVATION_CAPTURE_BYTES,
+            OperationalContext::new(),
+        );
+        assert_eq!(body.collect().await.unwrap().to_bytes(), expected);
+        let observed = observation
+            .finish(ProviderSurface::OpenAIResponses, true)
+            .await;
+        assert!(observed.truncated);
+        assert!(observed.value.is_none());
+        assert_eq!(
+            observed.metadata()["otel.status_description"],
+            FlowError::Internal("provider response stream contained malformed SSE data".into())
+                .to_string(),
+        );
+        assert!(!observed.metadata().to_string().contains("do-not-publish"));
+    }
+}
+
+#[tokio::test]
+async fn stream_observation_reports_collection_failure_without_payloads() {
+    let event = json!({"candidates": [{"index": 0, "content": {"parts": [{
+        "functionCall": {"name": "lookup", "partialArgs": [{
+            "jsonPath": "$.id", "numberValue": "do-not-publish"
+        }]}
+    }]}}]});
+    let expected = Bytes::from(format!("data: {event}\n\n"));
     let (body, observation) = observe_body(
         Full::new(expected.clone()),
         StatusCode::OK,
@@ -391,11 +473,16 @@ async fn stream_observation_rejects_malformed_trailing_sse_frames() {
     );
     assert_eq!(body.collect().await.unwrap().to_bytes(), expected);
     let observed = observation
-        .finish(ProviderSurface::OpenAIResponses, true)
+        .finish(ProviderSurface::GeminiGenerateContent, true)
         .await;
     assert!(observed.truncated);
     assert!(observed.value.is_none());
-    assert!(observed.failure.is_some());
+    assert_eq!(
+        observed.metadata()["otel.status_description"],
+        FlowError::Internal("provider response stream event could not be collected".into())
+            .to_string(),
+    );
+    assert!(!observed.metadata().to_string().contains("do-not-publish"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -3303,7 +3390,11 @@ async fn observation_handles_empty_invalid_and_unsuccessful_provider_responses()
         .await;
     assert!(observed.truncated);
     assert!(observed.value.is_none());
-    assert!(observed.failure.unwrap().contains("truncated"));
+    assert_eq!(
+        observed.failure.unwrap(),
+        FlowError::Internal("provider response stream contained malformed SSE data".into())
+            .to_string(),
+    );
 }
 
 #[cfg(unix)]
