@@ -1453,3 +1453,39 @@ async fn a_timed_out_worker_exit_report_keeps_its_place_before_the_next_request(
     assert_eq!(arrived, vec![("worker_exited", 1), ("release", 2)]);
     server.abort();
 }
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn group_liveness_reports_live_members_and_ignores_zombies() {
+    use std::os::unix::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    let mut zombie_only = std::process::Command::new("true")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut mixed = std::process::Command::new("sh")
+        .args(["-c", "sleep 600 >/dev/null 2>&1 & exit 0"])
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let zombie_group = zombie_only.id() as libc::pid_t;
+    let mixed_group = mixed.id() as libc::pid_t;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while super::group_has_live_members(zombie_group).unwrap() {
+        assert!(Instant::now() < deadline, "the zombie-only leader exits");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(super::group_has_live_members(mixed_group).unwrap());
+    // SAFETY: A negative PID addresses the test-owned process group and dereferences no memory.
+    assert_eq!(unsafe { libc::kill(-mixed_group, libc::SIGKILL) }, 0);
+    while super::group_has_live_members(mixed_group).unwrap() {
+        assert!(
+            Instant::now() < deadline,
+            "the killed member leaves the group"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    zombie_only.wait().unwrap();
+    mixed.wait().unwrap();
+}
