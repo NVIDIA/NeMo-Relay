@@ -1505,11 +1505,12 @@ impl Default for OpenAIChatStreamingCodec {
 }
 
 impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIChatStreamingCodec {
-    /// Forwards a provider error chunk before reporting its error on the next poll.
+    /// Reports provider errors and rejects EOF before every observed choice has finished.
     fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
         LlmJsonStream::from_closeable(ChatCompletionStream {
             inner: stream,
             provider_error: None,
+            choice_completion: Default::default(),
             ended: false,
         })
     }
@@ -1550,6 +1551,8 @@ impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIChatStreamingC
 struct ChatCompletionStream {
     inner: LlmJsonStream,
     provider_error: Option<FlowError>,
+    // Track forwarded choices independently of when middleware feeds the collector.
+    choice_completion: std::collections::BTreeMap<u64, bool>,
     ended: bool,
 }
 
@@ -1569,16 +1572,62 @@ impl Stream for ChatCompletionStream {
             Poll::Ready(Some(Ok(event))) => {
                 if let Some(error) = event.get("error").filter(|error| error.is_object()) {
                     this.provider_error = Some(chat_stream_error(error));
+                } else if let Some(choices) = event.get("choices").and_then(Json::as_array) {
+                    for choice in choices {
+                        let index = choice.get("index").and_then(Json::as_u64).unwrap_or(0);
+                        let finished = this.choice_completion.entry(index).or_default();
+                        // Completion is sticky; audio can end with only an expiry update.
+                        *finished |= choice
+                            .get("finish_reason")
+                            .and_then(Json::as_str)
+                            .is_some_and(|reason| !reason.is_empty())
+                            || choice.get("delta").is_some_and(is_audio_done_delta);
+                    }
                 }
                 Poll::Ready(Some(Ok(event)))
             }
-            result @ (Poll::Ready(None) | Poll::Ready(Some(Err(_)))) => {
+            Poll::Ready(None) => {
                 this.ended = true;
-                result
+                if !this.choice_completion.is_empty()
+                    && this.choice_completion.values().all(|finished| *finished)
+                {
+                    Poll::Ready(None)
+                } else {
+                    log::warn!(
+                        target: "nemo_relay.runtime",
+                        event = "llm_stream_incomplete",
+                        reason = "unfinished_choices";
+                        "OpenAI Chat stream ended before all choices finished"
+                    );
+                    Poll::Ready(Some(Err(FlowError::Internal(
+                        "OpenAI Chat stream ended before all choices finished".into(),
+                    ))))
+                }
+            }
+            Poll::Ready(Some(Err(error))) => {
+                this.ended = true;
+                Poll::Ready(Some(Err(error)))
             }
             Poll::Pending => Poll::Pending,
         }
     }
+}
+
+// Audio can end with an expiry-only delta; SDK serialization may add null placeholders.
+fn is_audio_done_delta(delta: &Json) -> bool {
+    let Some(delta) = delta.as_object() else {
+        return false;
+    };
+    let Some(audio) = delta.get("audio").and_then(Json::as_object) else {
+        return false;
+    };
+    audio.get("expires_at").is_some_and(Json::is_number)
+        && ["id", "data", "transcript"]
+            .iter()
+            .all(|field| audio.get(*field).is_none_or(Json::is_null))
+        && delta
+            .iter()
+            .all(|(field, value)| field == "audio" || value.is_null())
 }
 
 fn chat_stream_error(error: &Json) -> FlowError {

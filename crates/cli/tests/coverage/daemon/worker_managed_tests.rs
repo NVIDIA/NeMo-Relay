@@ -346,6 +346,46 @@ async fn observation_body_deadline_terminates_a_stalled_observer() {
 }
 
 #[tokio::test]
+async fn chat_stream_early_eof_fails_observation_without_changing_delivery() {
+    for complete in [false, true] {
+        let partial = json!({"choices": [{"index": 0,
+            "delta": {"content": "Partial"}, "finish_reason": null}]});
+        let mut wire = format!("data: {partial}\n\n");
+        if complete {
+            wire.push_str(&format!(
+                "data: {}\n\n",
+                json!({"choices": [{
+                    "index": 0, "delta": {}, "finish_reason": "stop"
+                }]})
+            ));
+        }
+        wire.push_str("data: [DONE]\n\n");
+        let expected = Bytes::from(wire);
+        let (body, observation) = observe_body(
+            Full::new(expected.clone()),
+            StatusCode::OK,
+            DEFAULT_OBSERVATION_CAPTURE_BYTES,
+            OperationalContext::new(),
+        );
+        assert_eq!(body.collect().await.unwrap().to_bytes(), expected);
+        let observed = observation.finish(ProviderSurface::OpenAIChat, true).await;
+        assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
+        assert_eq!(observed.truncated, !complete);
+        assert_eq!(observed.value.is_some(), complete);
+        assert_eq!(
+            observed.metadata()["otel.status_code"],
+            if complete { "OK" } else { "ERROR" }
+        );
+        if !complete {
+            assert_eq!(
+                observed.metadata()["otel.status_description"],
+                "internal error: OpenAI Chat stream ended before all choices finished"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn stream_observation_validates_responses_completion_without_changing_delivery() {
     for terminal in [None, Some("completed"), Some("failed"), Some("incomplete")] {
         let mut wire = String::from(
@@ -2735,7 +2775,8 @@ async fn managed_runtime_executes_unary_and_stream_middleware_before_delivery() 
                         yield Ok::<_, Infallible>(Bytes::from_static(
                             b"data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"provider\"}}]}\n\n"));
                         release.notified().await;
-                        yield Ok(Bytes::from_static(b"data: [DONE]\n\n"));
+                        yield Ok(Bytes::from_static(
+                            b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"));
                     };
                     Response::builder().header(CONTENT_TYPE, "text/event-stream")
                         .body(Body::from_stream(stream)).unwrap()
