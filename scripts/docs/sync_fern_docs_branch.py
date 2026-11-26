@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from rust_reference_redirects import write_published_redirects
 
 VERSION_RE = re.compile(r"^(?P<base>[0-9]+\.[0-9]+\.[0-9]+)(?:-(?P<label>alpha|beta|rc)\.(?P<number>[0-9]+))?$")
 SNAPSHOT_RE = re.compile(r"^v([0-9]+)\.([0-9]+)\.([0-9]+)$")
@@ -35,6 +36,7 @@ FERN_SYNC_ITEMS = (
     "apis",
     "assets",
     "components",
+    "redirects",
     "fern.config.json",
     "llms.txt",
     "README.md",
@@ -208,6 +210,7 @@ def prune_release_versions(target_fern: Path) -> None:
     ]
     product["versions"] = [*latest_entries, *other_entries, *(releases[slug][1] for slug in retained)]
     write_yaml(docs_path, docs_yml)
+    write_published_redirects(target_fern, product)
 
 
 def sync_dev(source_root: Path, target_root: Path) -> None:

@@ -64,6 +64,17 @@ MODULE_DESCRIPTIONS = {
     "nemo-relay-node/model_pricing": "Model pricing plugin configuration helpers.",
 }
 BASE_URL = "/reference/api/nodejs-library-reference"
+RUNTIME_TOPICS = (
+    ("lifecycle", "Runtime lifecycle and plugins"),
+    ("scopes", "Scopes and propagation"),
+    ("llm", "LLM execution and codecs"),
+    ("tools", "Tool execution"),
+    ("middleware", "Middleware and guardrails"),
+    ("observability", "Events, subscribers, and exporters"),
+    ("resource-metrics", "Resource metrics"),
+    ("adaptive", "Adaptive optimization"),
+)
+RUNTIME_SOURCE_CHARACTER_LIMIT = 46_000
 
 
 @dataclass(slots=True)
@@ -467,33 +478,159 @@ def _write_item(lines: list[str], item: ApiItem, *, disambiguate: bool = False) 
     lines.append(f"```ts\n{item.declaration}\n```\n\n")
 
 
-def _write_module(output_dir: Path, module: ModuleDoc, position: int) -> None:
+def _module_header(module: ModuleDoc, position: int, *, title: str | None = None) -> list[str]:
     lines = [
-        frontmatter(module.title, module.description, position),
+        frontmatter(title or module.title, module.description, position),
         f"Generated from `{display_path(module.source, resolve=True)}`.\n\n",
         f"Import from `{module.import_path}`.\n\n",
     ]
     if module.description:
         lines.append(f"{_escape_text(module.description)}\n\n")
+    return lines
 
+
+def _name_counts(module: ModuleDoc) -> dict[str, int]:
     name_counts: dict[str, int] = {}
     for item in module.items:
         name_counts[item.name] = name_counts.get(item.name, 0) + 1
+    return name_counts
 
+
+def _append_items(lines: list[str], module: ModuleDoc, members: list[ApiItem]) -> None:
+    name_counts = _name_counts(module)
     for kind in SECTION_ORDER:
-        items = [item for item in module.items if item.kind == kind]
+        items = [item for item in members if item.kind == kind]
         if not items:
             continue
         lines.append(f"## {SECTION_TITLES[kind]}\n\n")
         for item in items:
             _write_item(lines, item, disambiguate=name_counts[item.name] > 1)
 
+
+def _append_reexports(lines: list[str], module: ModuleDoc) -> None:
     if module.reexports:
         lines.append("## Re-exports\n\n")
         for name in module.reexports:
             lines.append(f"- `{name}`\n")
         lines.append("\n")
 
+
+def _runtime_topic(item: ApiItem) -> str:
+    """Assign whole exports to related API tasks, without editing their content."""
+    name = item.name
+    lower = name.lower()
+    if (
+        any(term in lower for term in ("subscriber", "exporter", "opentelemetry"))
+        or name.startswith("EventMetadata")
+        or name
+        in {
+            "log",
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error",
+            "event",
+            "metric",
+            "DataSchema",
+            "MetricMeasurement",
+            "PendingMarkSpec",
+            "EventSanitizeFields",
+            "LogSeverity",
+            "MetricKind",
+            "MetricValueType",
+            "MetricTemporality",
+        }
+    ):
+        return "observability"
+    if lower.startswith(("register", "deregister", "scoperegister", "scopederegister")) and name not in {
+        "registerPlugin",
+        "deregisterPlugin",
+    }:
+        return "middleware"
+    if "optimization" in lower or name in {
+        "AdaptiveRuntime",
+        "validateAdaptiveConfig",
+        "buildCacheTelemetryEvent",
+        "setLatencySensitivity",
+    }:
+        return "adaptive"
+    if "codec" in lower or lower.startswith(("llm", "jsllm")):
+        return "llm"
+    if lower.startswith("tool"):
+        return "tools"
+    if (
+        "resource" in lower
+        or "accelerator" in lower
+        or lower.endswith(("metrics", "unit"))
+        or name == "ProcessSamplingMetadata"
+    ):
+        return "resource-metrics"
+    if any(term in lower for term in ("scope", "propagation", "traceparent")) or name == "getHandle":
+        return "scopes"
+    return "lifecycle"
+
+
+def _item_anchor(item: ApiItem, name_counts: dict[str, int]) -> str:
+    suffix = f"-{KIND_LABELS[item.kind].replace(' ', '-')}" if name_counts[item.name] > 1 else ""
+    return item.name.lower() + suffix
+
+
+def _runtime_pages(output_dir: Path, module: ModuleDoc, position: int) -> dict[Path, str]:
+    directory = output_dir / _slug(module.import_path)
+    module_url = f"{BASE_URL}/{_slug(module.import_path)}"
+    groups: dict[str, list[ApiItem]] = {slug: [] for slug, _title in RUNTIME_TOPICS}
+    for item in module.items:
+        groups[_runtime_topic(item)].append(item)
+
+    # Preserve the original module lead-in and URL. The topic navigation is
+    # additive; every original item block is emitted unchanged on one subpage.
+    overview = _module_header(module, position)
+    overview.append("## Runtime API topics\n\n")
+    pages: dict[Path, str] = {}
+    for child_position, (slug, title) in enumerate(RUNTIME_TOPICS, start=1):
+        if not groups[slug]:
+            continue
+        overview.append(f"- [{title}]({module_url}/{slug})\n")
+        lines = _module_header(module, child_position, title=title)
+        _append_items(lines, module, groups[slug])
+        pages[directory / f"{slug}.mdx"] = "".join(lines)
+    overview.append("\n")
+
+    # Retain a complete symbol index and the former item fragments at the
+    # Runtime URL, so existing deep links lead to the relevant subpage link.
+    name_counts = _name_counts(module)
+    for kind in SECTION_ORDER:
+        items = [item for item in module.items if item.kind == kind]
+        if not items:
+            continue
+        overview.append(f"## {SECTION_TITLES[kind]}\n\n")
+        for item in items:
+            anchor = _item_anchor(item, name_counts)
+            suffix = f" {KIND_LABELS[kind]}" if name_counts[item.name] > 1 else ""
+            overview.append(f'<a id="{anchor}"></a>\n\n')
+            # Native relative links keep the deployed product/version prefix
+            # and avoid repeating the long absolute API path for every symbol.
+            target = f"{_slug(module.import_path)}/{_runtime_topic(item)}#{anchor}"
+            overview.append(f'- <a href="{target}"><code>{item.name}</code>{suffix}</a>\n\n')
+    _append_reexports(overview, module)
+    pages[directory / "index.mdx"] = "".join(overview)
+
+    for path, markdown in pages.items():
+        if len(markdown) >= RUNTIME_SOURCE_CHARACTER_LIMIT:
+            raise ValueError(f"Runtime reference topic exceeds its character budget: {path}")
+    return pages
+
+
+def _write_module(output_dir: Path, module: ModuleDoc, position: int) -> None:
+    if module.import_path == "nemo-relay-node":
+        for path, markdown in _runtime_pages(output_dir, module, position).items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(markdown, encoding="utf-8")
+        return
+    lines = _module_header(module, position)
+    _append_items(lines, module, module.items)
+    _append_reexports(lines, module)
     (output_dir / f"{_slug(module.import_path)}.mdx").write_text("".join(lines), encoding="utf-8")
 
 
@@ -508,6 +645,11 @@ def generate(package_root: Path, output_dir: Path) -> int:
     parsed = {module.source.resolve(): module for module in modules}
     for module in modules:
         _resolve_star_exports(module, parsed)
+
+    # Validate the Runtime split before replacing the last generated tree.
+    for position, module in enumerate(modules, start=2):
+        if module.import_path == "nemo-relay-node":
+            _runtime_pages(output_dir, module, position)
 
     reset_output_dir(output_dir)
     _write_index(output_dir, modules)
