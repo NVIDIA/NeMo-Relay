@@ -1283,6 +1283,38 @@ def test_langchain_model_response_codec_decodes_text_and_tool_calls() -> None:
     assert unknown_annotated.finish_reason == "provider_custom_stop"
 
 
+@pytest.mark.parametrize(
+    ("metadata_key", "finish_reason", "expected_finish_reason"),
+    [
+        ("stop_reason", "refusal", "content_filter"),
+        ("finish_reason", "function_call", "tool_use"),
+    ],
+)
+def test_langchain_model_response_codec_maps_finish_reasons(
+    metadata_key: str,
+    finish_reason: str,
+    expected_finish_reason: str,
+) -> None:
+    from langchain.agents.middleware import ModelResponse
+    from langchain_core.messages import AIMessage
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec, model_response_to_json
+
+    codec = LangChainCodec()
+    response = ModelResponse(
+        result=[
+            AIMessage(
+                content="done",
+                response_metadata={metadata_key: finish_reason},
+            )
+        ]
+    )
+
+    annotated = codec.decode_response(model_response_to_json(response, nemo_relay.typed.BestEffortAnyCodec()))
+
+    assert annotated.finish_reason == expected_finish_reason
+
+
 @pytest.mark.parametrize("use_async", [False, True])
 def test_model_call_applies_annotated_llm_request_intercept(
     use_async: bool,

@@ -47,10 +47,12 @@ _FINISH_REASON_MAP = {
     "stop": "complete",
     "end_turn": "complete",
     "tool_calls": "tool_use",
+    "function_call": "tool_use",
     "tool_use": "tool_use",
     "max_tokens": "length",
     "length": "length",
     "content_filter": "content_filter",
+    "refusal": "content_filter",
 }
 
 
