@@ -3,6 +3,7 @@
 
 mod install;
 
+use std::io::{ErrorKind, Write};
 use std::process::ExitCode;
 
 use clap::Args;
@@ -25,7 +26,13 @@ pub(super) fn execute(command: CompletionsCommand) -> Result<ExitCode, CliError>
         let path = install::install(command.shell)?;
         println!("✓ Installed completions: {}", path.display());
     } else {
-        generate_to(command.shell, &mut std::io::stdout())?;
+        let mut stdout = std::io::stdout().lock();
+        match generate_to(command.shell, &mut stdout)
+            .and_then(|()| stdout.flush().map_err(CliError::from))
+        {
+            Err(CliError::Io(error)) if error.kind() == ErrorKind::BrokenPipe => {}
+            result => result?,
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -40,6 +47,9 @@ pub(super) fn generate_to(
         )
     })?;
     let mut command = Cli::command();
-    clap_complete::generate(shell, &mut command, "nemo-relay", writer);
+    // clap_complete panics on write errors, so generate in memory before writing to the output.
+    let mut buffer = Vec::new();
+    clap_complete::generate(shell, &mut command, "nemo-relay", &mut buffer);
+    writer.write_all(&buffer)?;
     Ok(())
 }
