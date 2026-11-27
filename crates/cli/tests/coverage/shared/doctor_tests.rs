@@ -1618,10 +1618,56 @@ fn collect_completions_reports_shell_specific_paths() {
     assert!(checks[0].details.contains("_nemo-relay"));
 
     drop(_env);
-    let _env = EnvScope::set(&[("SHELL", Some(std::ffi::OsStr::new("/bin/fish")))]);
+    let fish_completion = temp
+        .path()
+        .join(".config")
+        .join("fish")
+        .join("completions")
+        .join("nemo-relay.fish");
+    std::fs::create_dir_all(fish_completion.parent().unwrap()).unwrap();
+    std::fs::write(&fish_completion, "complete -c nemo-relay\n").unwrap();
+    for xdg_config_home in [None, Some(std::ffi::OsStr::new(""))] {
+        let _env = EnvScope::set(&[
+            ("SHELL", Some(std::ffi::OsStr::new("/bin/fish"))),
+            ("XDG_CONFIG_HOME", xdg_config_home),
+        ]);
+        let checks = collect_completions(Some(temp.path()));
+        assert_eq!(checks[0].status, Status::Pass);
+        assert!(
+            checks[0]
+                .details
+                .contains(fish_completion.to_str().unwrap())
+        );
+    }
+
+    let config_dir = temp.path().join("config");
+    let selected_completion = config_dir
+        .join("fish")
+        .join("completions")
+        .join("nemo-relay.fish");
+    let _env = EnvScope::set(&[
+        ("SHELL", Some(std::ffi::OsStr::new("/bin/fish"))),
+        ("XDG_CONFIG_HOME", Some(config_dir.as_os_str())),
+    ]);
     let checks = collect_completions(Some(temp.path()));
     assert_eq!(checks[0].status, Status::Info);
-    assert!(checks[0].details.contains("nemo-relay.fish"));
+    assert!(
+        checks[0]
+            .details
+            .contains(selected_completion.to_str().unwrap())
+    );
+
+    std::fs::create_dir_all(selected_completion.parent().unwrap()).unwrap();
+    std::fs::write(&selected_completion, "complete -c nemo-relay\n").unwrap();
+    for home in [Some(temp.path()), None] {
+        let checks = collect_completions(home);
+        assert_eq!(checks[0].status, Status::Pass);
+        assert!(
+            checks[0]
+                .details
+                .contains(selected_completion.to_str().unwrap())
+        );
+    }
 
     drop(_env);
     let _env = EnvScope::set(&[("SHELL", None)]);
