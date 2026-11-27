@@ -32,8 +32,8 @@ pub(crate) use self::browser::BrowserApproval;
 pub(crate) use self::error::SignInError;
 pub(crate) use self::session::sessions_dir;
 
-/// Refresh an access token this many seconds before it expires.
-pub(crate) const REFRESH_MARGIN_SECS: u64 = 300;
+/// Maximum window before expiry in which to refresh an access token.
+pub(crate) const MAX_REFRESH_MARGIN_SECS: u64 = 300;
 /// The current Unix time in seconds. Production passes `now_secs`; tests pass a clock they move.
 pub(crate) type Clock<'a> = dyn Fn() -> u64 + Send + Sync + 'a;
 
@@ -112,7 +112,7 @@ pub(crate) async fn upstream_token_in(
     now: &Clock<'_>,
 ) -> Result<String, CliError> {
     if let Some(session) = read_session(&session_path(dir, source), source)?
-        && session.expires_at > now().saturating_add(REFRESH_MARGIN_SECS)
+        && session.is_fresh_at(now())
     {
         return Ok(session.access_token);
     }
@@ -137,7 +137,7 @@ pub(crate) async fn current_token(
         };
     };
     let session = read_session(&path, source)?.ok_or_else(|| login_required(source.issuer()))?;
-    if session.expires_at > now().saturating_add(REFRESH_MARGIN_SECS) {
+    if session.is_fresh_at(now()) {
         return Ok(session.access_token);
     }
     let Some(refresh_token) = session.refresh_token else {

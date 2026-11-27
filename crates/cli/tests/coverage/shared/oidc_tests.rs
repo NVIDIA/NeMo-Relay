@@ -35,6 +35,7 @@ struct Issuer {
     refresh_status: Option<StatusCode>,
     refresh_error: Option<&'static str>,
     omit_expires_in: bool,
+    expires_in: Option<u64>,
     /// A refresh moves this clock forward by the given seconds, like a slow issuer.
     refresh_takes: Option<(Arc<AtomicU64>, u64)>,
     grants: Vec<HashMap<String, String>>,
@@ -116,12 +117,12 @@ async fn device(body: String) -> Response {
     .into_response()
 }
 
-fn issued(access: &str, refresh: &str) -> Response {
+fn issued(access: &str, refresh: &str, expires_in: u64) -> Response {
     Json(json!({
         "access_token": access,
         "refresh_token": refresh,
         "token_type": "Bearer",
-        "expires_in": 3600,
+        "expires_in": expires_in,
     }))
     .into_response()
 }
@@ -142,7 +143,7 @@ async fn token(State(issuer): State<Shared>, body: String) -> Response {
                 state.device_replies.front().copied()
             };
             match reply.unwrap_or("issued") {
-                "issued" => issued("access-1", "refresh-1"),
+                "issued" => issued("access-1", "refresh-1", state.expires_in.unwrap_or(3600)),
                 "unavailable" => {
                     (StatusCode::BAD_GATEWAY, "<html>bad gateway</html>").into_response()
                 }
@@ -152,7 +153,7 @@ async fn token(State(issuer): State<Shared>, body: String) -> Response {
         "authorization_code" => {
             let challenge = super::browser::code_challenge(&form["code_verifier"]);
             if form["code"] == "code-1" && state.challenge.as_deref() == Some(challenge.as_str()) {
-                issued("access-1", "refresh-1")
+                issued("access-1", "refresh-1", state.expires_in.unwrap_or(3600))
             } else {
                 refused("invalid_grant")
             }
@@ -217,7 +218,9 @@ fn refresh_reply(state: &Issuer, form: &HashMap<String, String>) -> Response {
         (None, None) if form["refresh_token"] == "refresh-1" && state.omit_expires_in => {
             Json(json!({ "access_token": "access-2", "token_type": "Bearer" })).into_response()
         }
-        (None, None) if form["refresh_token"] == "refresh-1" => issued("access-2", "refresh-2"),
+        (None, None) if form["refresh_token"] == "refresh-1" => {
+            issued("access-2", "refresh-2", state.expires_in.unwrap_or(3600))
+        }
         (None, None) => refused("invalid_grant"),
     }
 }
@@ -281,6 +284,7 @@ fn store(dir: &Path, source: &OidcSource, refresh: Option<&str>, expires_at: u64
             access_token: "access-1".into(),
             refresh_token: refresh.map(str::to_owned),
             expires_at,
+            expires_in: None,
         },
     )
     .unwrap();
@@ -410,14 +414,47 @@ async fn gateway_token_reuses_a_fresh_access_token_without_calling_the_issuer() 
 }
 
 #[tokio::test]
-async fn gateway_token_follows_the_token_expiry_not_a_fixed_cache_interval() {
+async fn fresh_five_minute_tokens_are_reused_by_cli_and_gateway() {
     let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().expires_in = Some(300);
+    let session = poll(&issuer, &source, &["issued"], device_start(1, 60))
+        .await
+        .unwrap();
+    let now = session.expires_at - 300 + 1;
+    let dir = tempfile::tempdir().unwrap();
+    ensure_sessions_dir(dir.path()).unwrap();
+    let path = session_path(dir.path(), &source);
+    write_session(&path, &session).unwrap();
+
+    assert_eq!(
+        current_token(dir.path(), &source, &|| now).await.unwrap(),
+        "access-1"
+    );
+
+    // A fresh gateway token must not wait for another process to release the lock.
+    let _held = super::session::SessionLock::acquire(&path).await.unwrap();
+    tokio::time::pause();
+    let token = tokio::time::timeout(
+        Duration::from_secs(1),
+        upstream_token_in(dir.path(), &source, &|| now),
+    )
+    .await
+    .expect("a fresh gateway token should bypass the refresh lock")
+    .unwrap();
+    assert_eq!(token, "access-1");
+    assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+}
+
+#[tokio::test]
+async fn legacy_sign_ins_gain_lifetime_aware_refresh_on_renewal() {
+    let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().expires_in = Some(300);
     let dir = tempfile::tempdir().unwrap();
     store(
         dir.path(),
         &source,
         Some("refresh-1"),
-        1_000 + REFRESH_MARGIN_SECS - 1,
+        1_000 + MAX_REFRESH_MARGIN_SECS - 1,
     );
 
     let token = upstream_token_in(dir.path(), &source, &|| 1_000)
@@ -428,7 +465,48 @@ async fn gateway_token_follows_the_token_expiry_not_a_fixed_cache_interval() {
     assert_eq!(issuer.lock().unwrap().grants.len(), 1);
     let session = saved(dir.path(), &source);
     assert_eq!(session.refresh_token.as_deref(), Some("refresh-2"));
-    assert_eq!(session.expires_at, 1_000 + 3600);
+    assert_eq!(session.expires_at, 1_000 + 300);
+    assert_eq!(session.expires_in, Some(300));
+    assert_eq!(
+        current_token(dir.path(), &source, &|| 1_001).await.unwrap(),
+        "access-2"
+    );
+    assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+}
+
+#[test]
+fn token_freshness_respects_lifetime_expiry_and_legacy_boundaries() {
+    for (expires_in, expires_at, now, expected) in [
+        (Some(300), 1_300, 1_149, true),
+        (Some(300), 1_300, 1_150, false),
+        (Some(300), 1_300, 1_300, false),
+        (Some(299), 1_299, 1_149, true),
+        (Some(299), 1_299, 1_150, false),
+        (Some(3600), 4_600, 4_299, true),
+        (Some(3600), 4_600, 4_300, false),
+        (Some(1), 1_001, 1_000, true),
+        (Some(1), 1_001, 1_001, false),
+        (Some(0), 1_000, 1_000, false),
+        (None, 1_300, 999, true),
+        (None, 1_300, 1_000, false),
+        (Some(u64::MAX), u64::MAX, u64::MAX - 301, true),
+        (Some(u64::MAX), u64::MAX, u64::MAX - 300, false),
+        (Some(u64::MAX), u64::MAX, u64::MAX, false),
+    ] {
+        let session = Session {
+            issuer: "https://issuer.example".into(),
+            client_id: CLIENT_ID.into(),
+            access_token: "access-1".into(),
+            refresh_token: Some("refresh-1".into()),
+            expires_at,
+            expires_in,
+        };
+        assert_eq!(
+            session.is_fresh_at(now),
+            expected,
+            "lifetime={expires_in:?}, expiry={expires_at}, now={now}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -670,18 +748,21 @@ async fn gateway_error_without_a_sign_in_names_the_login_command() {
 
 #[tokio::test]
 async fn concurrent_token_calls_refresh_once() {
-    let (source, issuer) = start_issuer().await;
-    let dir = tempfile::tempdir().unwrap();
-    store(dir.path(), &source, Some("refresh-1"), 0);
+    for expires_in in [300, 3600] {
+        let (source, issuer) = start_issuer().await;
+        issuer.lock().unwrap().expires_in = Some(expires_in);
+        let dir = tempfile::tempdir().unwrap();
+        store(dir.path(), &source, Some("refresh-1"), 0);
 
-    let (a, b) = tokio::join!(
-        current_token(dir.path(), &source, &|| 1_000),
-        current_token(dir.path(), &source, &|| 1_000),
-    );
+        let (a, b) = tokio::join!(
+            current_token(dir.path(), &source, &|| 1_000),
+            current_token(dir.path(), &source, &|| 1_000),
+        );
 
-    assert_eq!(a.unwrap(), "access-2");
-    assert_eq!(b.unwrap(), "access-2");
-    assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+        assert_eq!(a.unwrap(), "access-2");
+        assert_eq!(b.unwrap(), "access-2");
+        assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+    }
 }
 
 #[tokio::test]
