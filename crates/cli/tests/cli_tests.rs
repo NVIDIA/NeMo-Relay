@@ -3243,6 +3243,28 @@ fn cli_completions_prints_script_for_requested_shell() {
 }
 
 #[test]
+fn cli_completions_exits_quietly_when_output_pipe_is_closed() {
+    for shell in ["bash", "zsh", "fish"] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+
+        let output = Command::new(gateway_bin())
+            .args(["--log-level", "error", "completions", shell])
+            .stdout(writer)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "{shell}: status {}; stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty(), "{shell}: {:?}", output.stderr);
+    }
+}
+
+#[test]
 fn cli_plugins_edit_requires_tty() {
     let temp = tempfile::tempdir().unwrap();
     let output = Command::new(gateway_bin())

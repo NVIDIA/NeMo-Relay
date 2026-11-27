@@ -414,6 +414,31 @@ fn completions_helper_reports_missing_shell_and_generates_requested_shell() {
 }
 
 #[test]
+fn completions_helper_returns_output_write_errors() {
+    struct FailingWriter(std::io::ErrorKind);
+
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(self.0, "completion output failed"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    for kind in [
+        std::io::ErrorKind::BrokenPipe,
+        std::io::ErrorKind::PermissionDenied,
+    ] {
+        let error =
+            generate_completions_to(Some(clap_complete::Shell::Bash), &mut FailingWriter(kind))
+                .unwrap_err();
+        assert!(matches!(error, error::CliError::Io(error) if error.kind() == kind));
+    }
+}
+
+#[test]
 fn cli_parses_native_mcp_subcommand_and_bind_override() {
     let cli = Cli::try_parse_from(["nemo-relay", "mcp"]).unwrap();
     assert!(matches!(cli.command, Some(Command::Mcp)));
