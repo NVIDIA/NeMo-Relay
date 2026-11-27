@@ -1618,7 +1618,12 @@ fn collect_completions_reports_shell_specific_paths() {
     assert!(checks[0].details.contains("_nemo-relay"));
 
     drop(_env);
-    let fish_completion = temp.path().join(".config/fish/completions/nemo-relay.fish");
+    let fish_completion = temp
+        .path()
+        .join(".config")
+        .join("fish")
+        .join("completions")
+        .join("nemo-relay.fish");
     std::fs::create_dir_all(fish_completion.parent().unwrap()).unwrap();
     std::fs::write(&fish_completion, "complete -c nemo-relay\n").unwrap();
     let _env = EnvScope::set(&[
@@ -1635,7 +1640,10 @@ fn collect_completions_reports_shell_specific_paths() {
 
     drop(_env);
     let config_dir = temp.path().join("config");
-    let selected_completion = config_dir.join("fish/completions/nemo-relay.fish");
+    let selected_completion = config_dir
+        .join("fish")
+        .join("completions")
+        .join("nemo-relay.fish");
     let _env = EnvScope::set(&[
         ("SHELL", Some(std::ffi::OsStr::new("/bin/fish"))),
         ("XDG_CONFIG_HOME", Some(config_dir.as_os_str())),
