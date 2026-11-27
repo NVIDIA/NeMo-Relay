@@ -4215,6 +4215,69 @@ fn finished_span_named<'a>(
         .unwrap_or_else(|| panic!("missing span {name}"))
 }
 
+#[test]
+fn manual_anthropic_cache_writes_use_duration_specific_costs() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    for default_rate in [false, true] {
+        let mut cache_write_rates = vec![
+            json!({"duration": 300, "per_million": 2.0}),
+            json!({"duration": 3600, "per_million": 4.0}),
+        ];
+        if default_rate {
+            cache_write_rates.push(json!({"per_million": 9.0}));
+        }
+        let catalog = PricingCatalog::from_json_str(
+            &json!({
+                "version": 1,
+                "entries": [{
+                    "provider": "anthropic",
+                    "model_id": "cache-duration-test",
+                    "pricing_as_of": "2026-11-27",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 0.0,
+                        "output_per_million": 0.0,
+                        "cache_write_rates": cache_write_rates
+                    },
+                    "prompt_cache": {"read_accounting": "separate"}
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+        let event = make_end_event(
+            Uuid::now_v7(),
+            None,
+            "chat",
+            ScopeType::Llm,
+            Some(json!({
+                "model": "cache-duration-test",
+                "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": 1_000_000,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 500_000,
+                        "ephemeral_1h_input_tokens": 500_000
+                    }
+                }
+            })),
+        );
+        let attributes = attr_map(&end_attributes(&event));
+        assert_eq!(
+            attributes.get("nemo_relay.llm.cost.total"),
+            Some(&"3".to_string()),
+            "default cache-write rate present: {default_rate}"
+        );
+        assert_eq!(
+            attributes.get("nemo_relay.llm.cost.currency"),
+            Some(&"USD".to_string())
+        );
+    }
+}
+
 fn install_disambiguation_pricing(model_id: &str, preferred_provider: &str) {
     let catalog = PricingCatalog::from_json_str(
         &json!({

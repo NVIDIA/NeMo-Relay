@@ -164,6 +164,65 @@ fn usage_extracts_nested_anthropic_one_hour_cache_writes() {
 }
 
 #[test]
+fn usage_preserves_explicit_five_minute_cache_writes_within_the_total() {
+    for (total, five_minute, one_hour, expected) in [
+        (50, 50, 0, vec![(50, Some(300))]),
+        (50, 30, 20, vec![(30, Some(300)), (20, Some(3_600))]),
+        (
+            50,
+            10,
+            20,
+            vec![(20, None), (20, Some(3_600)), (10, Some(300))],
+        ),
+        (50, 60, 20, vec![(30, Some(300)), (20, Some(3_600))]),
+        (50, 10, 60, vec![(50, Some(3_600))]),
+        (0, 0, 0, vec![(0, Some(300))]),
+    ] {
+        for map in ["usage", "token_usage"] {
+            let output = json!({
+                (map): {
+                    "cache_creation_input_tokens": total,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": five_minute,
+                        "ephemeral_1h_input_tokens": one_hour
+                    }
+                }
+            });
+            let usage = usage_from_manual_llm_output(Some(&output)).expect("has cache usage");
+            assert_eq!(usage.cache_write_total(), Some(total));
+            let writes: Vec<_> = usage
+                .cache_write_tokens
+                .unwrap()
+                .into_iter()
+                .map(|write| (write.count, write.duration))
+                .collect();
+            assert_eq!(writes, expected, "{output}");
+        }
+    }
+}
+
+#[test]
+fn usage_prefers_five_minute_cache_writes_from_usage_map() {
+    let output = json!({
+        "usage": {
+            "cache_creation_input_tokens": 50,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0}
+        },
+        "token_usage": {
+            "cache_creation": {"ephemeral_5m_input_tokens": 50}
+        }
+    });
+    let usage = usage_from_manual_llm_output(Some(&output)).expect("has cache usage");
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![CacheWriteTokenCounts {
+            count: 50,
+            duration: None
+        }])
+    );
+}
+
+#[test]
 fn usage_prefers_nested_one_hour_cache_writes_from_usage_map() {
     let output = json!({
         "usage": {
@@ -204,7 +263,9 @@ fn model_name_extraction() {
 fn usage_reads_the_per_duration_cache_write_list_back() {
     let output = json!({
         "usage": {
-            "cache_write_tokens": [{"count": 30, "duration": 300}, {"count": 20, "duration": 3600}]
+            "cache_write_tokens": [{"count": 30, "duration": 300}, {"count": 20, "duration": 3600}],
+            "cache_creation_input_tokens": 100,
+            "cache_creation": {"ephemeral_5m_input_tokens": 100}
         }
     });
     let usage = usage_from_manual_llm_output(Some(&output)).expect("has cache usage");
@@ -234,8 +295,10 @@ fn usage_map_cache_writes_win_over_a_token_usage_list() {
 }
 
 #[test]
-fn usage_with_only_a_one_hour_count_has_no_data_to_report() {
+fn usage_without_a_cache_write_total_does_not_infer_writes_from_duration_counts() {
     // Without a total there are no cache writes, so nothing else makes it usage.
     let output = json!({"usage": {"cache_creation_1h_input_tokens": 3}});
+    assert_eq!(usage_from_manual_llm_output(Some(&output)), None);
+    let output = json!({"usage": {"cache_creation": {"ephemeral_5m_input_tokens": 3}}});
     assert_eq!(usage_from_manual_llm_output(Some(&output)), None);
 }

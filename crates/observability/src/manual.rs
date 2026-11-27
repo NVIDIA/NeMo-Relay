@@ -94,6 +94,12 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
         "cacheWrite",
     ];
     let cache_write_tokens = first_u64_from_manual_usage(usage, token_usage, &cache_write_aliases);
+    let cache_write_5m_tokens = first_nested_u64_from_manual_usage(
+        usage,
+        token_usage,
+        "cache_creation",
+        "ephemeral_5m_input_tokens",
+    );
     let cache_write_1h_aliases = [
         "cache_creation_1h_input_tokens",
         "cacheCreation1hInputTokens",
@@ -125,11 +131,27 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
             })
     };
     let scalar_writes = || {
-        CacheWriteTokenCounts::from_total_and_one_hour(
+        let mut writes = CacheWriteTokenCounts::from_total_and_one_hour(
             cache_write_tokens,
             cache_write_1h_tokens,
             None,
-        )
+        )?;
+        if let Some(five_minute) = cache_write_5m_tokens
+            && let Some(rest) = writes.first_mut().filter(|write| write.duration.is_none())
+        {
+            // Keep the total authoritative and leave unclassified writes unknown.
+            let count = five_minute.min(rest.count);
+            if count == rest.count {
+                rest.duration = Some(300);
+            } else if count > 0 {
+                rest.count -= count;
+                writes.push(CacheWriteTokenCounts {
+                    count,
+                    duration: Some(300),
+                });
+            }
+        }
+        Some(writes)
     };
     let cache_writes = cache_write_list(usage)
         .or_else(|| {
