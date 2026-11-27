@@ -375,6 +375,20 @@ pub(crate) fn enforce_required_dynamic_plugin_startup(
     )))
 }
 
+fn validate_manifest_compatibility(
+    manifest: &DynamicPluginManifest,
+    entry: Option<&ScopedDynamicPluginRecord>,
+) -> nemo_relay_plugin_host::Result<()> {
+    manifest.validate()?;
+    // Registered targets already check native API support during registry refresh.
+    if entry.is_none()
+        && let Some(api) = manifest.compat.native_api.as_deref()
+    {
+        nemo_relay_plugin_host::dynamic::native_api_support(api)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn validate(
     command: PluginsValidateRequest,
     server: &GatewayOverrides,

@@ -30,6 +30,7 @@ use super::state::ScopedDynamicPluginRecord;
 use super::trust::EvaluatedDynamicPluginTrust;
 use super::{
     inspect_compat_data, inspect_load_data, list_validation_state, redacted_host_config_json,
+    validate_manifest_compatibility,
 };
 
 #[derive(Debug)]
@@ -269,7 +270,7 @@ pub(super) fn inspect_data(
 pub(super) fn validate_success(
     input: ValidateResponseInput<'_>,
 ) -> ResponseEnvelope<ValidateResponse> {
-    let compatibility_error = input.manifest.validate().err();
+    let compatibility_error = validate_manifest_compatibility(input.manifest, input.entry).err();
     let notes = input
         .entry
         .and_then(|entry| entry.record.status.validation.message.clone())

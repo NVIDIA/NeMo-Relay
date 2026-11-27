@@ -3899,6 +3899,77 @@ fn scoped_list_and_remove_reject_conflicting_scope_flags() {
 }
 
 #[test]
+fn validate_path_reports_native_api_compatibility_in_text_and_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let id = "acme.native-validation";
+    let manifest_path = write_native_dynamic_manifest(&plugin_dir, id);
+    let original = std::fs::read_to_string(&manifest_path).unwrap();
+    let mut resolved = ResolvedConfig::default();
+    allow_unsigned_test_plugins(&mut resolved);
+
+    for (api, supported) in [
+        ("v1.0", true),
+        ("1", false),
+        ("v1.1", false),
+        ("v2.0", false),
+    ] {
+        std::fs::write(
+            &manifest_path,
+            original.replace("native_api = \"v1.0\"", &format!("native_api = {api:?}")),
+        )
+        .unwrap();
+        let (manifest, manifest_ref) =
+            load_manifest_for_action("validate", &manifest_path).unwrap();
+        let policy =
+            evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
+        let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
+        assert!(policy.policy_satisfied);
+        assert!(trust.is_satisfied());
+        let response = serde_json::to_value(validate_success(ValidateResponseInput {
+            command: "plugins validate",
+            target: Some(manifest_ref.as_str()),
+            target_kind: "path",
+            resolved_plugin_id: Some(id),
+            manifest: &manifest,
+            manifest_ref: &manifest_ref,
+            entry: None,
+            host_config: None,
+            policy: &policy,
+            trust: &trust,
+        }))
+        .unwrap();
+        let text = PluginValidationSummaryView {
+            manifest: &manifest,
+            manifest_ref: &manifest_ref,
+            entry: None,
+            host_config: None,
+            policy: &policy,
+            trust: &trust,
+        }
+        .to_string();
+
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["data"]["valid"], supported, "{api}: {response}");
+        if supported {
+            assert_eq!(response["data"]["errors"], serde_json::json!([]));
+            assert!(text.contains(&format!("Dynamic plugin '{id}' is valid.")));
+        } else {
+            let errors = response["data"]["errors"].as_array().unwrap();
+            assert_eq!(errors.len(), 1, "{response}");
+            let error = errors[0].as_str().unwrap();
+            assert!(error.contains("native API"), "{error}");
+            assert!(error.contains(api), "{error}");
+            assert!(text.contains("has incompatible settings"), "{text}");
+            assert!(text.contains(error), "{text}");
+        }
+    }
+}
+
+#[test]
 fn validate_renders_summary_for_path_and_id_targets() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
