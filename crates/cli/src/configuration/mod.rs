@@ -74,12 +74,14 @@ struct FileConfig {
     agents: Option<FileAgentsConfig>,
     logging: Option<logging::FileLoggingConfig>,
     diagnostics: Option<RuntimeDiagnosticsConfig>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
 impl FileConfig {
-    /// Dotted names of keys in the daemon, gateway, upstream, and agent sections that Relay does not know.
+    /// Unknown root keys and dotted names of unknown daemon, gateway, upstream, and agent keys.
     fn unknown_keys(&self) -> Vec<String> {
-        let mut keys = Vec::new();
+        let mut keys: Vec<String> = self.unknown.keys().cloned().collect();
         let mut collect = |section: &str, unknown: &BTreeMap<String, toml::Value>| {
             keys.extend(unknown.keys().map(|key| format!("{section}.{key}")));
         };

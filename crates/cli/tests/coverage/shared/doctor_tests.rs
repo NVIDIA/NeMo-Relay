@@ -1325,6 +1325,50 @@ fn diagnostic_layer_status_rejects_toml_syntax_before_shape_validation() {
 }
 
 #[test]
+fn layer_status_warns_about_unknown_root_config_keys_without_disabling_the_layer() {
+    let temp = tempfile::tempdir().unwrap();
+    for (name, text, unknown_key) in [
+        ("root-value", "misspeled = true\n", Some("misspeled")),
+        (
+            "root-table",
+            "[upstreem]\nopenai_base_url = 'https://team.example/v1'\n",
+            Some("upstreem"),
+        ),
+        (
+            "selected-preset",
+            "preset = 'team'\n[presets.team.upstreem]\nopenai_base_url = 'https://team.example/v1'\n",
+            Some("upstreem"),
+        ),
+        (
+            "valid-preset",
+            "preset = 'team'\n[presets.team.upstream]\nopenai_base_url = 'https://team.example/v1'\n",
+            None,
+        ),
+        (
+            "inactive-preset",
+            "[presets.unused.upstreem]\nopenai_base_url = 'https://team.example/v1'\n",
+            None,
+        ),
+    ] {
+        let path = temp.path().join(format!("{name}.toml"));
+        std::fs::write(&path, text).unwrap();
+        let layer = layer_status(&path);
+        assert!(layer.active, "{name}");
+        match unknown_key {
+            Some(key) => {
+                assert_eq!(layer.status, Status::Warn, "{name}");
+                assert_eq!(
+                    layer.details,
+                    format!("unknown keys ignored: {key}"),
+                    "{name}"
+                );
+            }
+            None => assert_eq!(layer.status, Status::Pass, "{name}"),
+        }
+    }
+}
+
+#[test]
 fn check_dir_writable_does_not_create_missing_dir() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing-atif");
