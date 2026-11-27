@@ -160,3 +160,7 @@ Use `nemo-relay completions --install` to install completions for the shell
 identified by `SHELL`, or specify the shell explicitly with
 `nemo-relay completions zsh --install`. The command prints the installed file
 path.
+
+Fish completions use `$XDG_CONFIG_HOME/fish/completions` when `XDG_CONFIG_HOME`
+is nonempty, or `$HOME/.config/fish/completions` otherwise. `nemo-relay doctor`
+checks the same directory.

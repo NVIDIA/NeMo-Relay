@@ -1,10 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! `nemo-relay completions install` — write a shell completion script to the standard fpath /
-//! completions directory for the user's current `$SHELL`. Mirrors the file layout used by
-//! `scripts/install.sh` so curl-pipe installs and `cargo install` installs land in the same
-//! place.
+//! Shell completion installation for `nemo-relay completions --install`.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -16,7 +13,7 @@ use crate::commands::root::Cli;
 use crate::error::CliError;
 
 /// Generates the completion script for `$SHELL` and writes it to the matching shell-specific
-/// path under `$HOME`. Returns the path written so the CLI can echo it back to the user. The
+/// user directory. Returns the path written so the CLI can echo it back to the user. The
 /// shell argument is optional; when omitted, the function infers the shell from the `$SHELL`
 /// environment variable. Unsupported or undetectable shells produce a `Config` error so the
 /// caller can surface a clear message instead of writing to an unrelated path.
@@ -25,7 +22,12 @@ pub(crate) fn install(shell: Option<Shell>) -> Result<PathBuf, CliError> {
         Some(shell) => shell,
         None => detect_shell(std::env::var_os("SHELL"))?,
     };
-    let target = completion_path(shell, std::env::var_os("HOME"), std::env::var_os("ZDOTDIR"))?;
+    let target = completion_path(
+        shell,
+        std::env::var_os("HOME"),
+        std::env::var_os("ZDOTDIR"),
+        std::env::var_os("XDG_CONFIG_HOME"),
+    )?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -43,6 +45,7 @@ fn completion_path(
     shell: Shell,
     home: Option<OsString>,
     zdotdir: Option<OsString>,
+    xdg_config_home: Option<OsString>,
 ) -> Result<PathBuf, CliError> {
     match shell {
         Shell::Zsh => {
@@ -58,10 +61,16 @@ fn completion_path(
             Ok(PathBuf::from(home).join(".bash_completion.d/nemo-relay"))
         }
         Shell::Fish => {
-            let home = home.ok_or_else(|| {
-                CliError::Config("cannot resolve $HOME for fish completion".into())
-            })?;
-            Ok(PathBuf::from(home).join(".config/fish/completions/nemo-relay.fish"))
+            let config_dir = xdg_config_home
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| home.map(|home| PathBuf::from(home).join(".config")))
+                .ok_or_else(|| {
+                    CliError::Config(
+                        "cannot resolve $XDG_CONFIG_HOME or $HOME for fish completion".into(),
+                    )
+                })?;
+            Ok(config_dir.join("fish/completions/nemo-relay.fish"))
         }
         other => Err(CliError::Config(format!(
             "`nemo-relay completions install` does not support {other} — \

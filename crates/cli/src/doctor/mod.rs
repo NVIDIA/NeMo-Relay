@@ -1852,7 +1852,14 @@ fn collect_completions(home: Option<&std::path::Path>) -> Vec<Check> {
         });
         return checks;
     };
-    let Some(home) = home else {
+    let completion_base = match shell_name.as_str() {
+        "fish" => std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home.map(|home| home.join(".config"))),
+        _ => home.map(std::path::Path::to_path_buf),
+    };
+    let Some(completion_base) = completion_base else {
         checks.push(Check {
             name: "Completions",
             status: Status::Info,
@@ -1861,10 +1868,14 @@ fn collect_completions(home: Option<&std::path::Path>) -> Vec<Check> {
         return checks;
     };
     let likely_path = match shell_name.as_str() {
-        "zsh" => Some(home.join(".zfunc").join("_nemo-relay")),
-        "bash" => Some(home.join(".bash_completion.d").join("nemo-relay")),
+        "zsh" => Some(completion_base.join(".zfunc").join("_nemo-relay")),
+        "bash" => Some(
+            completion_base
+                .join(".bash_completion.d")
+                .join("nemo-relay"),
+        ),
         "fish" => Some(
-            home.join(".config")
+            completion_base
                 .join("fish")
                 .join("completions")
                 .join("nemo-relay.fish"),
