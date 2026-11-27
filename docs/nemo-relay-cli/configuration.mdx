@@ -32,6 +32,9 @@ System config has the highest file-level priority. CLI flags and environment
 variables override file config. Repository-local `.nemo-relay/config.toml`
 files are ignored unless selected explicitly.
 
+Relay ignores unknown top-level settings and reports them as warnings. Other
+valid settings still apply.
+
 ### Named Presets
 
 A preset is a named group of default settings in `config.toml`. An administrator
