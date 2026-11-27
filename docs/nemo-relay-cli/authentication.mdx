@@ -264,8 +264,10 @@ The issuer must offer the device grant to the client.
 or `~/.config/nemo-relay/oidc/` otherwise. On Windows, Relay falls back to
 `USERPROFILE` when `HOME` is unavailable. There is one file for each issuer,
 client ID, and scope. The gateway reads it for each authenticated managed request.
-When the access token expires within five minutes, the gateway refreshes it with
-the stored refresh token first. Refreshes from several processes run one at a
+The gateway refreshes the access token shortly before expiry using the stored
+refresh token. The refresh window is the smaller of five minutes and half the
+token's issued lifetime. Sign-ins saved by earlier Relay versions adopt the new
+window after their next refresh. Refreshes from several processes run one at a
 time, so a rotated refresh token is never used twice. Because the gateway reads
 the stored sign-in for each request, the token's real expiry applies, and
 `nemo-relay auth logout` takes effect on the next request.

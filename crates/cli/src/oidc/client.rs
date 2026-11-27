@@ -396,6 +396,7 @@ impl OidcClient {
                 .refresh_token
                 .or_else(|| previous_refresh.map(str::to_owned)),
             expires_at: now.saturating_add(expires_in),
+            expires_in: Some(expires_in),
         })
     }
 }

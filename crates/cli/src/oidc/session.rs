@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{OidcSource, auth_error};
+use super::{MAX_REFRESH_MARGIN_SECS, OidcSource, auth_error};
 use crate::error::CliError;
 
 const SESSIONS_DIR: &str = "oidc";
@@ -26,6 +26,19 @@ pub(crate) struct Session {
     pub(crate) refresh_token: Option<String>,
     /// Seconds since the Unix epoch.
     pub(crate) expires_at: u64,
+    /// Issued lifetime in seconds; absent in sign-ins saved by older versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) expires_in: Option<u64>,
+}
+
+impl Session {
+    pub(super) fn is_fresh_at(&self, now: u64) -> bool {
+        // A fresh token must have time to be reused before entering its refresh window.
+        let margin = self.expires_in.map_or(MAX_REFRESH_MARGIN_SECS, |lifetime| {
+            MAX_REFRESH_MARGIN_SECS.min(lifetime / 2)
+        });
+        self.expires_at > now.saturating_add(margin)
+    }
 }
 
 /// Returns `None` when no sign-in is stored for this issuer and client.
