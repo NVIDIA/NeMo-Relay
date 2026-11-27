@@ -282,7 +282,7 @@ impl fmt::Display for PluginValidationSummaryView<'_> {
             .entry
             .map(|entry| entry.record.status.validation.environment)
             .unwrap_or(DynamicPluginCheckState::Unknown);
-        if let Err(error) = self.manifest.validate() {
+        if let Err(error) = validate_manifest_compatibility(self.manifest, self.entry) {
             writeln!(
                 f,
                 "Dynamic plugin '{}' has incompatible settings: {error}",
