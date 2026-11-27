@@ -1626,19 +1626,20 @@ fn collect_completions_reports_shell_specific_paths() {
         .join("nemo-relay.fish");
     std::fs::create_dir_all(fish_completion.parent().unwrap()).unwrap();
     std::fs::write(&fish_completion, "complete -c nemo-relay\n").unwrap();
-    let _env = EnvScope::set(&[
-        ("SHELL", Some(std::ffi::OsStr::new("/bin/fish"))),
-        ("XDG_CONFIG_HOME", None),
-    ]);
-    let checks = collect_completions(Some(temp.path()));
-    assert_eq!(checks[0].status, Status::Pass);
-    assert!(
-        checks[0]
-            .details
-            .contains(fish_completion.to_str().unwrap())
-    );
+    for xdg_config_home in [None, Some(std::ffi::OsStr::new(""))] {
+        let _env = EnvScope::set(&[
+            ("SHELL", Some(std::ffi::OsStr::new("/bin/fish"))),
+            ("XDG_CONFIG_HOME", xdg_config_home),
+        ]);
+        let checks = collect_completions(Some(temp.path()));
+        assert_eq!(checks[0].status, Status::Pass);
+        assert!(
+            checks[0]
+                .details
+                .contains(fish_completion.to_str().unwrap())
+        );
+    }
 
-    drop(_env);
     let config_dir = temp.path().join("config");
     let selected_completion = config_dir
         .join("fish")
