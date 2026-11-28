@@ -761,6 +761,10 @@ struct GatewayRequestCodec {
 }
 
 impl LlmCodec for GatewayRequestCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        self.inner.redaction()
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         self.inner.codec_identity()
     }

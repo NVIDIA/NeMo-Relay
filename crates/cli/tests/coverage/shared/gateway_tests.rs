@@ -655,6 +655,10 @@ fn generation_routes_have_request_codecs_and_passthrough_routes_do_not() {
             "missing request codec for {route:?}"
         );
         assert!(
+            codecs.request.as_ref().unwrap().redaction().is_some(),
+            "missing request redaction capability for {route:?}"
+        );
+        assert!(
             codecs.streaming.is_some(),
             "missing stream codec for {route:?}"
         );
