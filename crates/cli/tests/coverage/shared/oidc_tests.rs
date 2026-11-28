@@ -239,20 +239,67 @@ async fn start_issuer() -> (OidcSource, Shared) {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn the_sign_in_lock_file_is_private() {
+async fn login_keeps_new_and_existing_sign_in_storage_private() {
     use std::os::unix::fs::PermissionsExt;
     let (source, _issuer) = start_issuer().await;
-    let dir = tempfile::tempdir().unwrap();
-    ensure_sessions_dir(dir.path()).unwrap();
-    let session = session_path(dir.path(), &source);
-    let _lock = super::session::SessionLock::acquire(&session)
-        .await
-        .unwrap();
-    let mode = std::fs::metadata(session.with_extension("lock"))
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600);
+    for existing_mode in [None, Some(0o700), Some(0o755)] {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("config");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let dir = parent.join("oidc");
+        if let Some(mode) = existing_mode {
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+
+        login(&dir, &source, LoginMethod::Device, |_| {})
+            .await
+            .unwrap();
+
+        for (path, expected) in [
+            (parent, 0o755),
+            (dir.clone(), 0o700),
+            (session_path(&dir, &source), 0o600),
+            (session_path(&dir, &source).with_extension("lock"), 0o600),
+        ] {
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, expected, "{}", path.display());
+        }
+        assert_eq!(saved(&dir, &source).access_token, "access-1");
+    }
+}
+
+#[test]
+fn sign_in_directory_rejects_files_and_blocked_parents() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("file");
+    std::fs::write(&file, b"unchanged").unwrap();
+    let permissions = std::fs::metadata(&file).unwrap().permissions();
+
+    assert!(ensure_sessions_dir(&file).is_err());
+    assert!(ensure_sessions_dir(&file.join("oidc")).is_err());
+    assert_eq!(std::fs::read(&file).unwrap(), b"unchanged");
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions(), permissions);
+}
+
+#[cfg(unix)]
+#[test]
+fn sign_in_directory_rejects_symlinks_without_changing_the_target() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("config");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dir = parent.join("oidc");
+    symlink(&parent, &dir).unwrap();
+
+    assert!(ensure_sessions_dir(&dir).is_err());
+    assert_eq!(
+        std::fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
 }
 
 #[test]
