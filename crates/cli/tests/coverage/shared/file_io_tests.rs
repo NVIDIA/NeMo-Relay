@@ -6,6 +6,8 @@ use std::fs::OpenOptions;
 use tempfile::tempdir;
 
 use super::*;
+#[cfg(windows)]
+use crate::test_support::set_windows_dacl;
 
 #[test]
 fn lock_attempts_distinguish_contention_from_errors() {
@@ -323,47 +325,6 @@ fn failed_windows_atomic_replacement_keeps_the_original_target() {
             .to_string_lossy()
             .ends_with(".tmp")
     }));
-}
-
-#[cfg(windows)]
-fn set_windows_dacl(path: &std::path::Path, sddl: &str) {
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Authorization::{
-        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
-    };
-    use windows_sys::Win32::Security::{
-        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-        SetFileSecurityW,
-    };
-
-    let sddl = windows_wide(sddl);
-    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-    // SAFETY: The SDDL is NUL-terminated and the output pointer is valid.
-    assert_ne!(
-        unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                sddl.as_ptr(),
-                SDDL_REVISION_1,
-                &mut descriptor,
-                std::ptr::null_mut(),
-            )
-        },
-        0,
-        "{}",
-        std::io::Error::last_os_error()
-    );
-    let path = windows_wide(path.as_os_str());
-    // SAFETY: The path and descriptor are valid for the duration of the call.
-    let result = unsafe {
-        SetFileSecurityW(
-            path.as_ptr(),
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            descriptor,
-        )
-    };
-    // SAFETY: The descriptor was allocated by ConvertStringSecurityDescriptor... above.
-    unsafe { LocalFree(descriptor.cast()) };
-    assert_ne!(result, 0, "{}", std::io::Error::last_os_error());
 }
 
 #[cfg(windows)]

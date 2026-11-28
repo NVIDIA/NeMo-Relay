@@ -239,20 +239,155 @@ async fn start_issuer() -> (OidcSource, Shared) {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn the_sign_in_lock_file_is_private() {
+async fn login_keeps_new_and_existing_sign_in_storage_private() {
     use std::os::unix::fs::PermissionsExt;
     let (source, _issuer) = start_issuer().await;
-    let dir = tempfile::tempdir().unwrap();
-    ensure_sessions_dir(dir.path()).unwrap();
-    let session = session_path(dir.path(), &source);
-    let _lock = super::session::SessionLock::acquire(&session)
+    for existing_mode in [None, Some(0o700), Some(0o755)] {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("config");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let dir = parent.join("oidc");
+        if let Some(mode) = existing_mode {
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+
+        login(&dir, &source, LoginMethod::Device, |_| {})
+            .await
+            .unwrap();
+
+        for (path, expected) in [
+            (parent, 0o755),
+            (dir.clone(), 0o700),
+            (session_path(&dir, &source), 0o600),
+            (session_path(&dir, &source).with_extension("lock"), 0o600),
+        ] {
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, expected, "{}", path.display());
+        }
+        assert_eq!(saved(&dir, &source).access_token, "access-1");
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn login_repairs_existing_windows_sign_in_directory_access() {
+    use crate::filesystem::{create_private_dir, read_windows_dacl, windows_path_is_private};
+
+    let (source, _issuer) = start_issuer().await;
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("config");
+    std::fs::create_dir(&parent).unwrap();
+    crate::test_support::set_windows_dacl(&parent, "D:P(A;;FA;;;WD)");
+    let dir = parent.join("oidc");
+    create_private_dir(&dir).unwrap();
+    crate::test_support::set_windows_dacl(&dir, "D:P(A;;FA;;;WD)");
+    assert!(!windows_path_is_private(&dir).unwrap());
+    let parent_dacl = read_windows_dacl(&parent).unwrap();
+
+    login(&dir, &source, LoginMethod::Device, |_| {})
         .await
         .unwrap();
-    let mode = std::fs::metadata(session.with_extension("lock"))
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600);
+
+    assert!(windows_path_is_private(&dir).unwrap());
+    assert!(windows_path_is_private(&session_path(&dir, &source)).unwrap());
+    assert_eq!(saved(&dir, &source).access_token, "access-1");
+    assert_eq!(read_windows_dacl(&parent).unwrap(), parent_dacl);
+}
+
+#[test]
+fn sign_in_directory_rejects_files_and_blocked_parents() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("file");
+    std::fs::write(&file, b"unchanged").unwrap();
+    let permissions = std::fs::metadata(&file).unwrap().permissions();
+
+    assert!(ensure_sessions_dir(&file).is_err());
+    assert!(ensure_sessions_dir(&file.join("oidc")).is_err());
+    assert_eq!(std::fs::read(&file).unwrap(), b"unchanged");
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions(), permissions);
+}
+
+#[cfg(unix)]
+#[test]
+fn sign_in_directory_protection_checks_ownership_before_changing_permissions() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    use super::session::protect_unix_sessions_dir;
+
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("oidc");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let metadata = std::fs::symlink_metadata(&dir).unwrap();
+    let owner_uid = metadata.uid();
+
+    let result = protect_unix_sessions_dir(&dir, &metadata, owner_uid.wrapping_add(1));
+
+    assert!(
+        matches!(result, Err(CliError::Config(ref message)) if message.contains("not owned by the current user")),
+        "{result:?}"
+    );
+    assert_eq!(
+        std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+
+    protect_unix_sessions_dir(&dir, &metadata, owner_uid).unwrap();
+    assert_eq!(
+        std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sign_in_directory_creation_preserves_permission_errors() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Root bypasses directory write restrictions.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("config");
+    std::fs::create_dir(&parent).unwrap();
+    let original_permissions = std::fs::metadata(&parent).unwrap().permissions();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let dir = parent.join("oidc");
+
+    let result = ensure_sessions_dir(&dir);
+    let parent_mode =
+        std::fs::metadata(&parent).map(|metadata| metadata.permissions().mode() & 0o777);
+    std::fs::set_permissions(&parent, original_permissions).unwrap();
+
+    assert!(
+        matches!(result, Err(CliError::Io(ref error)) if error.kind() == std::io::ErrorKind::PermissionDenied),
+        "{result:?}"
+    );
+    assert!(!dir.try_exists().unwrap());
+    assert_eq!(parent_mode.unwrap(), 0o555);
+}
+
+#[cfg(unix)]
+#[test]
+fn sign_in_directory_rejects_symlinks_without_changing_the_target() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("config");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dir = parent.join("oidc");
+    symlink(&parent, &dir).unwrap();
+
+    assert!(ensure_sessions_dir(&dir).is_err());
+    assert_eq!(
+        std::fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
 }
 
 #[test]

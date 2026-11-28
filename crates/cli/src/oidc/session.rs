@@ -53,16 +53,48 @@ pub(crate) fn write_session(path: &Path, session: &Session) -> Result<(), CliErr
 }
 
 pub(crate) fn ensure_sessions_dir(dir: &Path) -> Result<(), CliError> {
-    if dir.exists() {
-        return Ok(());
-    }
     if let Some(parent) = dir.parent() {
         crate::filesystem::create_private_dir_all(parent)?;
     }
     match crate::filesystem::create_private_dir(dir) {
-        Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => Err(CliError::Io(error)),
-        _ => Ok(()),
+        Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => {
+            return Err(CliError::Io(error));
+        }
+        _ => {}
     }
+    let metadata = std::fs::symlink_metadata(dir)?;
+    if !metadata.file_type().is_dir() {
+        return Err(CliError::Config(format!(
+            "OIDC sign-in directory {} must be a real directory",
+            dir.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        protect_unix_sessions_dir(dir, &metadata, unsafe { libc::geteuid() })?;
+    }
+    #[cfg(windows)]
+    crate::filesystem::protect_private_windows_path(&std::fs::canonicalize(dir)?)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(super) fn protect_unix_sessions_dir(
+    dir: &Path,
+    metadata: &std::fs::Metadata,
+    current_uid: u32,
+) -> Result<(), CliError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    if metadata.uid() != current_uid {
+        return Err(CliError::Config(format!(
+            "OIDC sign-in directory {} is not owned by the current user",
+            dir.display()
+        )));
+    }
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
 }
 
 /// One file per issuer, client and scope, so sign-ins to several providers, or with other
