@@ -1004,6 +1004,62 @@ fn dynamic_plugin_diagnostic_checks_distinguish_registry_and_host_config_sources
 }
 
 #[tokio::test]
+async fn collect_report_warns_about_unknown_keys_in_cross_file_presets() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let user = xdg.join("nemo-relay");
+    let system = temp.path().join("system");
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::create_dir_all(&system).unwrap();
+    std::fs::write(
+        system.join("config.toml"),
+        "[presets.team.upstream]\nmisspeled = 1\n[presets.valid.upstream]\nresponse_timeout_secs = 25\n",
+    )
+    .unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(xdg.as_os_str())),
+        (
+            "NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR",
+            Some(system.as_os_str()),
+        ),
+        ("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", None),
+    ]);
+    let previous_system = crate::configuration::set_test_system_config_dir(Some(system));
+    for prepared in [false, true] {
+        for (selection, status, details) in [
+            (
+                "preset = 'team'\n",
+                Status::Warn,
+                "unknown keys ignored: upstream.misspeled",
+            ),
+            ("preset = 'valid'\n", Status::Pass, "valid"),
+            ("", Status::Pass, "valid"),
+        ] {
+            std::fs::write(user.join("config.toml"), selection).unwrap();
+            let report = collect_report(
+                None,
+                DoctorProbeMode::Offline,
+                &GatewayOverrides {
+                    prepared: prepared.then(|| {
+                        Arc::new(crate::configuration::PreparedConfig::load(None).unwrap())
+                    }),
+                    ..GatewayOverrides::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                report.configuration.resolution.status, status,
+                "selection={selection:?}, prepared={prepared}"
+            );
+            assert_eq!(report.configuration.resolution.details, details);
+        }
+    }
+    crate::configuration::set_test_system_config_dir(previous_system);
+}
+
+#[tokio::test]
 async fn collect_report_preserves_configuration_and_plugin_resolution_failures() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let directory = tempfile::tempdir().unwrap();

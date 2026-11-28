@@ -137,6 +137,7 @@ pub(crate) struct ResolvedConfig {
     pub(crate) gateway: GatewayConfig,
     pub(crate) agents: AgentConfigs,
     pub(crate) logging: LoggingConfig,
+    pub(crate) unknown_config_keys: Vec<String>,
     pub(crate) dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     pub(crate) dynamic_plugin_policy: DynamicPluginHostPolicy,
     pub(crate) bootstrap_fingerprint: Option<String>,

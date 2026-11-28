@@ -87,14 +87,27 @@ pub(crate) async fn collect_report(
     gateway_overrides: &GatewayOverrides,
 ) -> Result<DoctorReport, CliError> {
     let (resolved, resolution) = match resolve_server_config(gateway_overrides) {
-        Ok(resolved) => (
-            resolved,
-            Check {
-                name: "Resolution",
-                status: Status::Pass,
-                details: "valid".into(),
-            },
-        ),
+        Ok(resolved) => {
+            let (status, details) = if resolved.unknown_config_keys.is_empty() {
+                (Status::Pass, "valid".into())
+            } else {
+                (
+                    Status::Warn,
+                    format!(
+                        "unknown keys ignored: {}",
+                        resolved.unknown_config_keys.join(", ")
+                    ),
+                )
+            };
+            (
+                resolved,
+                Check {
+                    name: "Resolution",
+                    status,
+                    details,
+                },
+            )
+        }
         Err(err) => {
             log::warn!(
                 target: "nemo_relay.diagnostics",
@@ -1921,7 +1934,6 @@ pub(crate) async fn run_doctor(
             "could not resolve logging configuration: {error}; repair or recreate the named logging configuration file"
         );
         if report.configuration.resolution.status == Status::Pass {
-            report.configuration.resolution.status = Status::Fail;
             report.configuration.resolution.details = logging_details;
         } else {
             report
@@ -1930,6 +1942,7 @@ pub(crate) async fn run_doctor(
                 .details
                 .push_str(&format!("; additionally, {logging_details}"));
         }
+        report.configuration.resolution.status = Status::Fail;
     }
     log::info!(
         target: "nemo_relay.diagnostics",

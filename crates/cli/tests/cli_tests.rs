@@ -3910,26 +3910,31 @@ fn cli_doctor_json_reports_a_missing_explicit_logging_config() {
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::create_dir_all(&cwd).unwrap();
 
-    let output = Command::new(gateway_bin())
-        .current_dir(&cwd)
-        .env("XDG_CONFIG_HOME", &xdg)
-        .env("HOME", temp.path())
-        .args(["--log-config-path"])
-        .arg(&config)
-        .args(["doctor", "--json"])
-        .output()
-        .unwrap();
+    let runtime_config = temp.path().join("config.toml");
+    for text in ["", "[upstream]\nmisspeled = 1\n"] {
+        std::fs::write(&runtime_config, text).unwrap();
+        let output = Command::new(gateway_bin())
+            .current_dir(&cwd)
+            .env("XDG_CONFIG_HOME", &xdg)
+            .env("HOME", temp.path())
+            .arg("--config")
+            .arg(&runtime_config)
+            .arg("--log-config-path")
+            .arg(&config)
+            .args(["doctor", "--json"])
+            .output()
+            .unwrap();
 
-    assert!(!output.status.success());
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let resolution = &report["configuration"]["resolution"];
-    assert_eq!(resolution["status"], "fail");
-    assert!(
-        resolution["details"]
-            .as_str()
-            .unwrap()
-            .contains(config.to_str().unwrap())
-    );
+        assert!(!output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let resolution = &report["configuration"]["resolution"];
+        assert_eq!(resolution["status"], "fail");
+        let details = resolution["details"].as_str().unwrap();
+        assert!(details.contains(config.to_str().unwrap()));
+        if !text.is_empty() {
+            assert!(details.contains("unknown keys ignored: upstream.misspeled"));
+        }
+    }
 }
 
 #[test]

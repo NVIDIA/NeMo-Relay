@@ -1962,7 +1962,8 @@ pub(crate) fn set_test_system_config_dir(path: Option<PathBuf>) -> Option<PathBu
 // are ignored, preserving defaults and prior merge layers.
 fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Result<(), CliError> {
     let config = parse_file_config(value)?;
-    for key in config.unknown_keys() {
+    resolved.unknown_config_keys = config.unknown_keys();
+    for key in &resolved.unknown_config_keys {
         log::warn!(
             target: "nemo_relay.configuration",
             event = "configuration_unknown_key",
