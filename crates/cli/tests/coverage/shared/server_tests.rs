@@ -2973,6 +2973,7 @@ async fn serve_listener_activates_adaptive_plugin_config() {
 
 #[tokio::test]
 async fn serve_listener_redacts_selected_request_fields_with_pii_plugin() {
+    const MODEL: &str = "gpt-gateway-selected-request-redaction";
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
@@ -2984,6 +2985,7 @@ async fn serve_listener_redacts_selected_request_fields_with_pii_plugin() {
         Arc::new(move |event| {
             if event.scope_category() == Some(ScopeCategory::Start)
                 && event.name() == "openai.chat_completions"
+                && event.model_name() == Some(MODEL)
             {
                 captured.lock().unwrap().push(event.to_json_value());
             }
@@ -3045,7 +3047,7 @@ async fn serve_listener_redacts_selected_request_fields_with_pii_plugin() {
     wait_for_gateway(&url).await;
 
     let request = json!({
-        "model": "gpt-test",
+        "model": MODEL,
         "messages": [{"role": "user", "content": "Email alice@example.com"}]
     });
     let response = test_http_client()
