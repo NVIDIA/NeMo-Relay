@@ -311,6 +311,68 @@ fn sign_in_directory_rejects_files_and_blocked_parents() {
 
 #[cfg(unix)]
 #[test]
+fn sign_in_directory_protection_checks_ownership_before_changing_permissions() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    use super::session::protect_unix_sessions_dir;
+
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("oidc");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let metadata = std::fs::symlink_metadata(&dir).unwrap();
+    let owner_uid = metadata.uid();
+
+    let result = protect_unix_sessions_dir(&dir, &metadata, owner_uid.wrapping_add(1));
+
+    assert!(
+        matches!(result, Err(CliError::Config(ref message)) if message.contains("not owned by the current user")),
+        "{result:?}"
+    );
+    assert_eq!(
+        std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+
+    protect_unix_sessions_dir(&dir, &metadata, owner_uid).unwrap();
+    assert_eq!(
+        std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sign_in_directory_creation_preserves_permission_errors() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Root bypasses directory write restrictions.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("config");
+    std::fs::create_dir(&parent).unwrap();
+    let original_permissions = std::fs::metadata(&parent).unwrap().permissions();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let dir = parent.join("oidc");
+
+    let result = ensure_sessions_dir(&dir);
+    let parent_mode =
+        std::fs::metadata(&parent).map(|metadata| metadata.permissions().mode() & 0o777);
+    std::fs::set_permissions(&parent, original_permissions).unwrap();
+
+    assert!(
+        matches!(result, Err(CliError::Io(ref error)) if error.kind() == std::io::ErrorKind::PermissionDenied),
+        "{result:?}"
+    );
+    assert!(!dir.try_exists().unwrap());
+    assert_eq!(parent_mode.unwrap(), 0o555);
+}
+
+#[cfg(unix)]
+#[test]
 fn sign_in_directory_rejects_symlinks_without_changing_the_target() {
     use std::os::unix::fs::{PermissionsExt, symlink};
 

@@ -71,18 +71,29 @@ pub(crate) fn ensure_sessions_dir(dir: &Path) -> Result<(), CliError> {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-        if metadata.uid() != unsafe { libc::geteuid() } {
-            return Err(CliError::Config(format!(
-                "OIDC sign-in directory {} is not owned by the current user",
-                dir.display()
-            )));
-        }
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        protect_unix_sessions_dir(dir, &metadata, unsafe { libc::geteuid() })?;
     }
     #[cfg(windows)]
     crate::filesystem::protect_private_windows_path(&std::fs::canonicalize(dir)?)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(super) fn protect_unix_sessions_dir(
+    dir: &Path,
+    metadata: &std::fs::Metadata,
+    current_uid: u32,
+) -> Result<(), CliError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    if metadata.uid() != current_uid {
+        return Err(CliError::Config(format!(
+            "OIDC sign-in directory {} is not owned by the current user",
+            dir.display()
+        )));
+    }
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
 
