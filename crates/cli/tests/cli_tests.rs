@@ -3570,7 +3570,8 @@ fn cli_pi_launch_warns_for_unverified_versions() {
         .unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
 
-        let output = Command::new(gateway_bin())
+        let mut command = Command::new(gateway_bin());
+        command
             .current_dir(temp.path())
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
@@ -3583,9 +3584,12 @@ fn cli_pi_launch_warns_for_unverified_versions() {
             .arg(&config)
             .arg("--plugin-config-path")
             .arg(&plugins)
-            .arg("pi")
-            .output()
-            .unwrap();
+            .arg("pi");
+        // Keep subprocess profiles in the coverage runner's output directory.
+        if let Some(profile_file) = std::env::var_os("LLVM_PROFILE_FILE") {
+            command.env("LLVM_PROFILE_FILE", profile_file);
+        }
+        let output = command.output().unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(exit_code), "{version}: {stderr}");
         assert_eq!(output.stdout, b"pi child output\n", "{version}: {stderr}");
