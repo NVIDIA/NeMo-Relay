@@ -87,12 +87,14 @@ impl TransparentRun {
         };
         let invocation = resolve_agent_invocation(&command, &resolved.agents)?;
         let agent = invocation.agent;
+        let mut version_warning = None;
         if !dry_run {
             let probe = crate::process::version_probe_argv(
                 agent,
                 &invocation.argv[..=invocation.host_index],
             );
             let version = validate_agent_version(agent, &probe).await?;
+            version_warning = agent.unverified_version(&version);
             resolved.gateway.launched_agent = Some(LaunchedAgent {
                 kind: agent.event_kind(),
                 version: version.to_string(),
@@ -103,8 +105,11 @@ impl TransparentRun {
         let gateway_url = format!("http://{address}");
         resolved.gateway.bind = address;
 
-        let prepared =
+        let mut prepared =
             PreparedAgentLaunch::from_invocation(invocation, &gateway_url, &resolved, dry_run)?;
+        if let Some(warning) = version_warning {
+            prepared.non_tty_warnings.push(warning);
+        }
         Ok(Self {
             agent,
             prepared,

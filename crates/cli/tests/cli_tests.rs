@@ -3538,6 +3538,69 @@ fn cli_pi_shortcut_prepares_a_pi_launch_with_the_extension() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn cli_pi_launch_warns_for_unverified_versions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let executable = temp.path().join("pi");
+    let config = temp.path().join("config.toml");
+    let plugins = temp.path().join("plugins.toml");
+    let extension = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/pi-extension");
+    std::fs::write(
+        &config,
+        format!(
+            "[agents.pi]\ncommand = {}\n",
+            toml_basic_string(executable.to_str().unwrap())
+        ),
+    )
+    .unwrap();
+    std::fs::write(&plugins, "version = 1\ncomponents = []\n").unwrap();
+
+    for (version, exit_code, unverified) in
+        [("1.6.0", 0, false), ("1.6.1", 0, true), ("2.0.0", 7, true)]
+    {
+        std::fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' '{version}'; exit 0; fi\nprintf 'pi child output\\n'\nexit {exit_code}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let output = Command::new(gateway_bin())
+            .current_dir(temp.path())
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+            .env("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", "1")
+            .env("NEMO_RELAY_PI_EXTENSION", &extension)
+            .env("PI_CODING_AGENT_DIR", temp.path().join("pi-home"))
+            .arg("--config")
+            .arg(&config)
+            .arg("--plugin-config-path")
+            .arg(&plugins)
+            .arg("pi")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(exit_code), "{version}: {stderr}");
+        assert_eq!(output.stdout, b"pi child output\n", "{version}: {stderr}");
+        if unverified {
+            assert!(
+                stderr.contains(&format!("warning: pi {version} is unverified.")),
+                "{version}: {stderr}"
+            );
+            assert!(stderr.contains("verified pi 1.6.0"), "{stderr}");
+        } else {
+            assert!(!stderr.contains("unverified"), "{version}: {stderr}");
+        }
+    }
+}
+
 #[test]
 fn cli_rejects_removed_cursor_entry_points() {
     let output = Command::new(gateway_bin()).arg("cursor").output().unwrap();
