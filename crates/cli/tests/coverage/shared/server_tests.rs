@@ -2972,11 +2972,47 @@ async fn serve_listener_activates_adaptive_plugin_config() {
 }
 
 #[tokio::test]
-async fn serve_listener_activates_pii_redaction_plugin_config() {
+async fn serve_listener_redacts_selected_request_fields_with_pii_plugin() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = crate::test_support::plugin_host::test_close_plugin_host();
 
+    let subscriber_name = "gateway-selected-request-redaction";
+    let captured_events = Arc::new(Mutex::new(Vec::new()));
+    let captured = captured_events.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::Start)
+                && event.name() == "openai.chat_completions"
+            {
+                captured.lock().unwrap().push(event.to_json_value());
+            }
+        }),
+    )
+    .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
+
+    let provider_request = Arc::new(Mutex::new(None));
+    let captured_request = provider_request.clone();
+    let provider = Router::new().route(
+        "/v1/chat/completions",
+        post(move |Json(request): Json<Value>| {
+            let captured = captured_request.clone();
+            async move {
+                *captured.lock().unwrap() = Some(request);
+                Json(completion_body("OK"))
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = TestServer {
+        url: format!("http://{address}"),
+        handle: tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() }),
+    };
+
     let mut config = test_config();
+    config.openai_base_url = upstream.url();
     config.plugin_config = Some(json!({
         "version": 1,
         "components": [
@@ -2991,7 +3027,8 @@ async fn serve_listener_activates_pii_redaction_plugin_config() {
                     "output": true,
                     "builtin": {
                         "action": "redact",
-                        "detector": "email"
+                        "detector": "email",
+                        "target_path_globs": ["/messages/*/content"]
                     }
                 }
             }
@@ -3007,8 +3044,37 @@ async fn serve_listener_activates_pii_redaction_plugin_config() {
 
     wait_for_gateway(&url).await;
 
+    let request = json!({
+        "model": "gpt-test",
+        "messages": [{"role": "user", "content": "Email alice@example.com"}]
+    });
+    let response = test_http_client()
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response: Value = response.json().await.unwrap();
+    assert_eq!(response["choices"][0]["message"]["content"], "OK");
+
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
+
+    assert_eq!(*provider_request.lock().unwrap(), Some(request));
+    let events = captured_events.lock().unwrap();
+    let event = events
+        .first()
+        .expect("the managed request must be observed");
+    assert_eq!(
+        event["data"]["content"]["messages"][0]["content"],
+        "Email [REDACTED]"
+    );
+    assert_eq!(
+        event["category_profile"]["annotated_request"]["messages"][0]["content"],
+        "Email [REDACTED]"
+    );
+    assert!(!event.to_string().contains("alice@example.com"));
 }
 
 #[tokio::test]
